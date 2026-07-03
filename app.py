@@ -25,21 +25,76 @@ def init_state() -> None:
 
 init_state()
 
+
+def sync_widget_values_from_protocol() -> None:
+    """Erzwingt, dass Widgets nach KI-/JSON-Änderungen neu aus dem Protokoll befüllt werden.
+
+    Streamlit merkt sich Eingabefelder über den `key`. Wenn ein Feld einmal leer
+    angezeigt wurde, überschreibt der gespeicherte Widget-Wert den neuen `value`.
+    Deshalb löschen wir bei Bedarf die betroffenen Widget-Keys vor dem Zeichnen der
+    Felder. Danach nimmt Streamlit wieder den Wert aus dem Protokollmodell.
+    """
+    if not st.session_state.pop("_sync_widgets_from_protocol", False):
+        return
+
+    keys_to_clear = [
+        "stamm_laa",
+        "stamm_schule",
+        "stamm_seminarjahr",
+        "stamm_bemerkungen",
+        "stamm_buv_nummer",
+        "einzel_datum",
+        "einzel_fach",
+        "einzel_klasse",
+        "einzel_thema",
+        "einzel_analyse_text",
+        "einzel_zusammenfassung",
+        "einzel_zv",
+        "doppel_datum",
+        "doppel_analyse_text",
+        "doppel_zusammenfassung",
+        "doppel_zv",
+        "stunde_1_fach",
+        "stunde_1_klasse",
+        "stunde_1_thema",
+        "stunde_2_fach",
+        "stunde_2_klasse",
+        "stunde_2_thema",
+        "erz_pos",
+        "erz_ber",
+        "hand_sach",
+        "einbringen",
+    ]
+
+    for key in keys_to_clear:
+        st.session_state.pop(key, None)
+
+
+sync_widget_values_from_protocol()
+
 st.title("Besondere Unterrichtsvorbereitung")
 st.caption("Internes Seminar-Tool: Arbeitsstand lokal als JSON speichern, Protokoll als Word-Dokument exportieren.")
+
+notice = st.session_state.pop("_notice", None)
+if notice:
+    st.success(notice)
 
 with st.sidebar:
     st.header("Arbeitsstand")
 
     if st.button("Neues Protokoll", use_container_width=True):
         st.session_state.protocol = create_empty_protocol()
-        st.success("Neues Protokoll angelegt.")
+        st.session_state["_sync_widgets_from_protocol"] = True
+        st.session_state["_notice"] = "Neues Protokoll angelegt."
+        st.rerun()
 
     uploaded_json = st.file_uploader("JSON-Arbeitsstand hochladen", type=["json"])
     if uploaded_json is not None:
         try:
             st.session_state.protocol = load_protocol_from_bytes(uploaded_json.getvalue())
-            st.success("Arbeitsstand geladen.")
+            st.session_state["_sync_widgets_from_protocol"] = True
+            st.session_state["_notice"] = "Arbeitsstand geladen."
+            st.rerun()
         except ValueError as exc:
             st.error(str(exc))
 
@@ -61,6 +116,10 @@ with st.sidebar:
         st.warning("Kein KI-Schlüssel gefunden. KI-Buttons funktionieren erst mit OPENAI_API_KEY.")
 
 protocol = st.session_state.protocol
+
+
+def persist_protocol() -> None:
+    st.session_state.protocol = ensure_protocol_shape(protocol)
 
 
 def save_back() -> None:
@@ -106,14 +165,20 @@ def draft_upload_section(target: dict, label: str, metadata_target: str) -> None
                 try:
                     meta = extract_metadata_from_draft(draft_text)
                     apply_metadata(meta, metadata_target)
-                    st.success("Stammdaten übernommen. Bitte prüfen und ggf. korrigieren.")
+                    persist_protocol()
+                    st.session_state["_sync_widgets_from_protocol"] = True
+                    st.session_state["_notice"] = "Stammdaten übernommen. Bitte prüfen und ggf. korrigieren."
+                    st.rerun()
                 except Exception as exc:
                     st.error(f"KI-Fehler: {exc}")
         with c2:
             if st.button("Entwurf kurz analysieren", key=f"analyse_{metadata_target}"):
                 try:
                     target["entwurf_analyse"] = analyze_draft_short(draft_text)
-                    st.success("Kurzanalyse erstellt.")
+                    persist_protocol()
+                    st.session_state["_sync_widgets_from_protocol"] = True
+                    st.session_state["_notice"] = "Kurzanalyse erstellt."
+                    st.rerun()
                 except Exception as exc:
                     st.error(f"KI-Fehler: {exc}")
 
@@ -197,7 +262,10 @@ with tabs[1]:
     if st.button("Notizen zur Einzel-BUV verdichten", key="summarize_einzel"):
         try:
             einzel["zusammenfassung_weiterarbeit"] = summarize_observations(protocol, "Einzel-BUV")
-            st.success("Zusammenfassung erstellt.")
+            persist_protocol()
+            st.session_state["_sync_widgets_from_protocol"] = True
+            st.session_state["_notice"] = "Zusammenfassung zur Einzel-BUV erstellt."
+            st.rerun()
         except Exception as exc:
             st.error(f"KI-Fehler: {exc}")
 
@@ -234,7 +302,10 @@ with tabs[2]:
     if st.button("Notizen zur Doppel-BUV verdichten", key="summarize_doppel"):
         try:
             doppel["zusammenfassung_weiterarbeit"] = summarize_observations(protocol, "Doppel-BUV")
-            st.success("Zusammenfassung erstellt.")
+            persist_protocol()
+            st.session_state["_sync_widgets_from_protocol"] = True
+            st.session_state["_notice"] = "Zusammenfassung zur Doppel-BUV erstellt."
+            st.rerun()
         except Exception as exc:
             st.error(f"KI-Fehler: {exc}")
 
