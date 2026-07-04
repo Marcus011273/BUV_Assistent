@@ -1,57 +1,68 @@
 from __future__ import annotations
 
+import ast
+import re
 from io import BytesIO
-from typing import Any, Dict, Iterable
+from pathlib import Path
+from typing import Any, Dict, Iterable, List
 
 from docx import Document
+from docx.enum.section import WD_SECTION
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Pt
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Cm, Inches, Pt, RGBColor
+
+
+BLACK = RGBColor(0, 0, 0)
+LIGHT_GRAY = "D9D9D9"
+MEDIUM_GRAY = "A6A6A6"
 
 
 def create_word_document(protocol: Dict[str, Any]) -> bytes:
     doc = Document()
-    _set_styles(doc)
+
+    _set_document_defaults(doc)
+    _set_page_margins(doc)
+    _add_header(doc)
 
     stammdaten = protocol.get("stammdaten", {})
-    buv_nummer = str(stammdaten.get("buv_nummer", "") or "").strip()
+    buv_nummer = clean_text(stammdaten.get("buv_nummer", ""))
 
     if buv_nummer:
         title_text = f"{buv_nummer}. Besondere Unterrichtsvorbereitung"
     else:
         title_text = "Besondere Unterrichtsvorbereitung"
 
-    title = doc.add_heading(title_text, level=0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _add_title(doc, title_text)
 
-    _add_meta_table(
-        doc,
-        [
-            ("Name LAA", stammdaten.get("laa_name", "")),
-            ("Seminarjahr", stammdaten.get("seminarjahr", "")),
-            ("Schule", stammdaten.get("schule", "")),
-            ("Bemerkungen", stammdaten.get("bemerkungen", "")),
-        ],
-    )
+    _add_stammdaten_block(doc, protocol)
 
+    _add_section_heading(doc, "Einzel-BUV")
     _add_section_einzel_buv(doc, protocol.get("einzel_buv", {}))
+
+    _add_section_heading(doc, "Doppel-BUV")
     _add_section_doppel_buv(doc, protocol.get("doppel_buv", {}))
+
+    _add_section_heading(doc, "Erzieherische Kompetenz")
     _add_section_kompetenzen(doc, protocol.get("kompetenzen", {}))
 
-    doc.add_heading("Zielvereinbarungen des LAA", level=1)
-    doc.add_paragraph(
-        "Bitte tragen Sie hier Ihre Zielvereinbarungen ein und senden Sie das Dokument anschließend zurück."
+    _add_section_heading(doc, "Zusammenfassung zur Weiterarbeit")
+    _add_summary_block(
+        doc,
+        "Besprechung der Einzel-BUV",
+        protocol.get("einzel_buv", {}).get("zusammenfassung_weiterarbeit", ""),
+    )
+    _add_summary_block(
+        doc,
+        "Besprechung der Doppel-BUV",
+        protocol.get("doppel_buv", {}).get("zusammenfassung_weiterarbeit", ""),
     )
 
-    einzel_zv = protocol.get("einzel_buv", {}).get("zielvereinbarungen_laa", "")
-    doppel_zv = protocol.get("doppel_buv", {}).get("zielvereinbarungen_laa", "")
+    _add_section_heading(doc, "Zielvereinbarungen des LAA")
+    _add_zielvereinbarungen(doc, protocol)
 
-    doc.add_heading("Zur Einzel-BUV", level=2)
-    _add_multiline_or_blanks(doc, einzel_zv, blank_lines=4)
-
-    doc.add_heading("Zur Doppel-BUV", level=2)
-    _add_multiline_or_blanks(doc, doppel_zv, blank_lines=4)
-
-    doc.add_paragraph()
     _add_signature_lines(doc)
 
     buffer = BytesIO()
@@ -59,190 +70,611 @@ def create_word_document(protocol: Dict[str, Any]) -> bytes:
     return buffer.getvalue()
 
 
-def _set_styles(doc: Document) -> None:
-    style = doc.styles["Normal"]
-    style.font.name = "Arial"
-    style.font.size = Pt(10)
-
-    for style_name in ["Heading 1", "Heading 2", "Heading 3"]:
-        doc.styles[style_name].font.name = "Arial"
+# ---------------------------------------------------------------------------
+# Grundlayout
+# ---------------------------------------------------------------------------
 
 
-def _add_meta_table(doc: Document, rows: Iterable[tuple[str, str]]) -> None:
-    table = doc.add_table(rows=0, cols=2)
-    table.style = "Table Grid"
+def _set_document_defaults(doc: Document) -> None:
+    normal = doc.styles["Normal"]
+    normal.font.name = "Arial"
+    normal.font.size = Pt(10.5)
+    normal.font.color.rgb = BLACK
+
+    for style_name in doc.styles:
+        try:
+            style = doc.styles[style_name]
+            if hasattr(style, "font"):
+                style.font.name = "Arial"
+                style.font.color.rgb = BLACK
+        except Exception:
+            pass
+
+
+def _set_page_margins(doc: Document) -> None:
+    section = doc.sections[0]
+    section.top_margin = Cm(2.2)
+    section.bottom_margin = Cm(2.0)
+    section.left_margin = Cm(2.2)
+    section.right_margin = Cm(2.2)
+    section.header_distance = Cm(0.8)
+
+
+def _add_header(doc: Document) -> None:
+    section = doc.sections[0]
+    header = section.header
+
+    table = header.add_table(rows=1, cols=2, width=Inches(6.5))
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    left_cell = table.cell(0, 0)
+    right_cell = table.cell(0, 1)
+
+    _clear_cell(left_cell)
+    _clear_cell(right_cell)
+
+    left_cell.width = Inches(4.7)
+    right_cell.width = Inches(1.8)
+
+    p = left_cell.paragraphs[0]
+    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    run = p.add_run("Seminar 45.2 München Stadt\n")
+    _format_run(run, size=9, bold=False)
+    run = p.add_run("Seminarleitung: Marcus Müller, Seminarrektor")
+    _format_run(run, size=9, bold=False)
+
+    logo_path = _find_logo_path()
+    if logo_path:
+        p_logo = right_cell.paragraphs[0]
+        p_logo.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        try:
+            run_logo = p_logo.add_run()
+            run_logo.add_picture(str(logo_path), width=Cm(2.3))
+        except Exception:
+            # Falls das Logo nicht eingefügt werden kann, bleibt die Kopfzeile ohne Logo.
+            pass
+
+    _remove_table_borders(table)
+
+
+def _find_logo_path() -> Path | None:
+    candidates = [
+        Path("Seminar 45.2.png"),
+        Path("seminar_logo.png"),
+        Path("assets") / "Seminar 45.2.png",
+        Path("assets") / "seminar_logo.png",
+        Path(__file__).resolve().parent.parent / "Seminar 45.2.png",
+        Path(__file__).resolve().parent.parent / "seminar_logo.png",
+        Path(__file__).resolve().parent.parent / "assets" / "Seminar 45.2.png",
+        Path(__file__).resolve().parent.parent / "assets" / "seminar_logo.png",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+def _add_title(doc: Document, text: str) -> None:
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.space_after = Pt(14)
+
+    run = p.add_run(clean_text(text))
+    _format_run(run, size=18, bold=True)
+
+
+def _add_section_heading(doc: Document, text: str) -> None:
+    p = doc.add_paragraph()
+    p.space_before = Pt(12)
+    p.space_after = Pt(6)
+
+    run = p.add_run(clean_text(text))
+    _format_run(run, size=13, bold=True)
+
+    _add_bottom_border(p, color=MEDIUM_GRAY, size="8")
+
+
+def _add_subheading(doc: Document, text: str) -> None:
+    p = doc.add_paragraph()
+    p.space_before = Pt(8)
+    p.space_after = Pt(3)
+
+    run = p.add_run(clean_text(text))
+    _format_run(run, size=11, bold=True)
+
+
+def _format_run(run, size: int = 10, bold: bool = False, italic: bool = False) -> None:
+    run.font.name = "Arial"
+    run.font.size = Pt(size)
+    run.font.bold = bold
+    run.font.italic = italic
+    run.font.color.rgb = BLACK
+
+
+# ---------------------------------------------------------------------------
+# Inhalt
+# ---------------------------------------------------------------------------
+
+
+def _add_stammdaten_block(doc: Document, protocol: Dict[str, Any]) -> None:
+    stammdaten = protocol.get("stammdaten", {})
+    einzel = protocol.get("einzel_buv", {})
+    doppel = protocol.get("doppel_buv", {})
+    stunde_1 = doppel.get("stunde_1", {})
+    stunde_2 = doppel.get("stunde_2", {})
+
+    _add_section_heading(doc, "Stammdaten")
+
+    rows = [
+        ("Name LAA", stammdaten.get("laa_name", "")),
+        ("Seminarjahr", stammdaten.get("seminarjahr", "")),
+        ("Schule", stammdaten.get("schule", "")),
+        ("Datum Einzel-BUV", einzel.get("datum", "")),
+        ("Fach / Klasse Einzel-BUV", _join_nonempty([einzel.get("fach", ""), einzel.get("klasse", "")], " / ")),
+        ("Thema Einzel-BUV", einzel.get("thema", "")),
+        ("Datum Doppel-BUV", doppel.get("datum", "")),
+        (
+            "Fach / Klasse Doppel-BUV, 1. Stunde",
+            _join_nonempty([stunde_1.get("fach", ""), stunde_1.get("klasse", "")], " / "),
+        ),
+        ("Thema Doppel-BUV, 1. Stunde", stunde_1.get("thema", "")),
+        (
+            "Fach / Klasse Doppel-BUV, 2. Stunde",
+            _join_nonempty([stunde_2.get("fach", ""), stunde_2.get("klasse", "")], " / "),
+        ),
+        ("Thema Doppel-BUV, 2. Stunde", stunde_2.get("thema", "")),
+    ]
 
     for label, value in rows:
-        cells = table.add_row().cells
-        cells[0].text = str(label)
-        cells[1].text = str(value or "")
+        _add_label_value_line(doc, label, value)
 
-    doc.add_paragraph()
+    bemerkungen = clean_text(stammdaten.get("bemerkungen", ""))
+    if bemerkungen:
+        _add_label_value_line(doc, "Bemerkungen", bemerkungen)
 
 
 def _add_section_einzel_buv(doc: Document, einzel: Dict[str, Any]) -> None:
-    doc.add_heading("Einzel-BUV", level=1)
+    _add_subheading(doc, "Kurzanalyse des Entwurfs")
+    _add_bullet_list(doc, einzel.get("entwurf_analyse", []))
 
-    _add_meta_table(
-        doc,
-        [
-            ("Datum", einzel.get("datum", "")),
-            ("Fach", einzel.get("fach", "")),
-            ("Klasse", einzel.get("klasse", "")),
-            ("Thema", einzel.get("thema", "")),
-        ],
-    )
-
-    _add_analysis(doc, "Kurzanalyse des Entwurfs", einzel.get("entwurf_analyse", []))
+    _add_subheading(doc, "Unterrichtskompetenz – Beobachtungen")
     _add_observations(doc, einzel.get("beobachtungen", {}))
-    _add_text_block(
-        doc,
-        "Zusammenfassung zur Weiterarbeit – Besprechung der Einzel-BUV",
-        einzel.get("zusammenfassung_weiterarbeit", ""),
-    )
 
 
 def _add_section_doppel_buv(doc: Document, doppel: Dict[str, Any]) -> None:
-    doc.add_heading("Doppel-BUV", level=1)
-    _add_meta_table(doc, [("Datum", doppel.get("datum", ""))])
-
     for key, label in [
         ("stunde_1", "Doppel-BUV – 1. Stunde"),
         ("stunde_2", "Doppel-BUV – 2. Stunde"),
     ]:
         stunde = doppel.get(key, {})
 
-        doc.add_heading(label, level=2)
+        _add_subheading(doc, label)
 
-        _add_meta_table(
-            doc,
-            [
-                ("Fach", stunde.get("fach", "")),
-                ("Klasse", stunde.get("klasse", "")),
-                ("Thema", stunde.get("thema", "")),
-            ],
-        )
+        _add_label_value_line(doc, "Fach / Klasse", _join_nonempty([stunde.get("fach", ""), stunde.get("klasse", "")], " / "))
+        _add_label_value_line(doc, "Thema", stunde.get("thema", ""))
 
-        _add_analysis(doc, "Kurzanalyse des Entwurfs", stunde.get("entwurf_analyse", []))
+        _add_subheading(doc, f"Kurzanalyse des Entwurfs – {label}")
+        _add_bullet_list(doc, stunde.get("entwurf_analyse", []))
+
+        _add_subheading(doc, f"Unterrichtskompetenz – Beobachtungen – {label}")
         _add_observations(doc, stunde.get("beobachtungen", {}))
-
-    _add_text_block(
-        doc,
-        "Zusammenfassung zur Weiterarbeit – Besprechung der Doppel-BUV",
-        doppel.get("zusammenfassung_weiterarbeit", ""),
-    )
 
 
 def _add_section_kompetenzen(doc: Document, kompetenzen: Dict[str, Any]) -> None:
-    doc.add_heading("Erzieherische Kompetenz", level=1)
-
     erzieh = kompetenzen.get("erzieherische_kompetenz", {})
 
-    _add_text_block(
+    _add_criteria_box(
         doc,
-        "Positive Feststellungen",
-        erzieh.get("positive_feststellungen", ""),
-        heading_level=2,
+        "Erzieherische Kompetenz",
+        [
+            ("Positive Feststellungen", erzieh.get("positive_feststellungen", "")),
+            ("Beratungspunkte", erzieh.get("beratungspunkte", "")),
+        ],
     )
 
-    _add_text_block(
-        doc,
-        "Beratungspunkte",
-        erzieh.get("beratungspunkte", ""),
-        heading_level=2,
-    )
-
-    _add_text_block(
+    _add_text_section_if_present(
         doc,
         "Handlungs- und Sachkompetenz",
         kompetenzen.get("handlungs_und_sachkompetenz", ""),
-        heading_level=1,
     )
 
-    _add_text_block(
+    _add_text_section_if_present(
         doc,
         "Einbringen in Schule und Seminar",
         kompetenzen.get("einbringen_schule_und_seminar", ""),
-        heading_level=1,
     )
 
 
-def _add_observations(doc: Document, observations: Dict[str, Dict[str, str]]) -> None:
-    doc.add_heading("Unterrichtskompetenz – Beobachtungen", level=2)
+def _add_observations(doc: Document, observations: Dict[str, Any]) -> None:
+    if not observations:
+        _add_empty_line(doc)
+        return
 
-    for kriterium, fields in observations.items():
-        fields = fields or {}
+    added_any = False
 
-        positive = fields.get("positive_feststellungen", "")
-        beratung = fields.get("beratungspunkte", "")
+    for kriterium, raw_fields in observations.items():
+        fields = _normalize_observation_fields(raw_fields)
+
+        positive = clean_text(fields.get("positive_feststellungen", ""))
+        beratung = clean_text(fields.get("beratungspunkte", ""))
 
         # Rohnotizen / Memo werden bewusst NICHT in das Word-Dokument übernommen.
         if not positive and not beratung:
             continue
 
-        doc.add_heading(kriterium, level=3)
+        _add_criteria_box(
+            doc,
+            clean_text(kriterium),
+            [
+                ("Positive Feststellungen", positive),
+                ("Beratungspunkte", beratung),
+            ],
+        )
+        added_any = True
 
-        if positive:
-            _add_text_block(
-                doc,
-                "Positive Feststellungen",
-                positive,
-                heading_level=None,
-            )
-
-        if beratung:
-            _add_text_block(
-                doc,
-                "Beratungspunkte",
-                beratung,
-                heading_level=None,
-            )
+    if not added_any:
+        _add_empty_line(doc)
 
 
-def _add_analysis(doc: Document, title: str, points: Any) -> None:
-    doc.add_heading(title, level=2)
+def _add_summary_block(doc: Document, title: str, text: Any) -> None:
+    cleaned = clean_text(text)
 
-    if isinstance(points, str):
-        points = [line.strip("- ") for line in points.splitlines() if line.strip()]
+    _add_subheading(doc, title)
 
-    if not points:
-        doc.add_paragraph("—")
+    if not cleaned:
+        _add_empty_line(doc)
         return
 
-    for point in points:
-        doc.add_paragraph(str(point), style="List Bullet")
+    lines = _to_lines(cleaned)
+
+    for line in lines:
+        _add_bullet(doc, line)
 
 
-def _add_text_block(doc: Document, title: str, text: str, heading_level: int | None = 2) -> None:
-    if heading_level is not None:
-        doc.add_heading(title, level=heading_level)
+def _add_zielvereinbarungen(doc: Document, protocol: Dict[str, Any]) -> None:
+    einzel_zv = clean_text(protocol.get("einzel_buv", {}).get("zielvereinbarungen_laa", ""))
+    doppel_zv = clean_text(protocol.get("doppel_buv", {}).get("zielvereinbarungen_laa", ""))
+
+    p = doc.add_paragraph()
+    run = p.add_run(
+        "Bitte tragen Sie Ihre Zielvereinbarungen ein und senden Sie das Dokument anschließend zurück."
+    )
+    _format_run(run, size=10, italic=True)
+
+    _add_subheading(doc, "Zur Einzel-BUV")
+    if einzel_zv:
+        _add_multiline_text(doc, einzel_zv)
     else:
+        _add_blank_bullets(doc, 4)
+
+    _add_subheading(doc, "Zur Doppel-BUV")
+    if doppel_zv:
+        _add_multiline_text(doc, doppel_zv)
+    else:
+        _add_blank_bullets(doc, 4)
+
+
+# ---------------------------------------------------------------------------
+# Darstellungshelfer
+# ---------------------------------------------------------------------------
+
+
+def _add_label_value_line(doc: Document, label: str, value: Any) -> None:
+    p = doc.add_paragraph()
+    p.paragraph_format.space_after = Pt(1)
+
+    run_label = p.add_run(f"{clean_text(label)}: ")
+    _format_run(run_label, size=10.5, bold=True)
+
+    run_value = p.add_run(clean_text(value))
+    _format_run(run_value, size=10.5)
+
+
+def _add_criteria_box(doc: Document, title: str, rows: Iterable[tuple[str, Any]]) -> None:
+    table = doc.add_table(rows=1, cols=1)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = True
+
+    cell = table.cell(0, 0)
+    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
+    _set_cell_shading(cell, "F7F7F7")
+    _set_cell_border(cell, color=LIGHT_GRAY)
+
+    p_title = cell.paragraphs[0]
+    p_title.paragraph_format.space_after = Pt(4)
+    run_title = p_title.add_run(clean_text(title))
+    _format_run(run_title, size=10.8, bold=True)
+
+    for label, value in rows:
+        cleaned = clean_text(value)
+        if not cleaned:
+            continue
+
+        p_label = cell.add_paragraph()
+        p_label.paragraph_format.space_before = Pt(2)
+        p_label.paragraph_format.space_after = Pt(0)
+        run_label = p_label.add_run(f"{clean_text(label)}:")
+        _format_run(run_label, size=10, bold=True)
+
+        for line in _to_lines(cleaned):
+            p_text = cell.add_paragraph()
+            p_text.paragraph_format.left_indent = Cm(0.35)
+            p_text.paragraph_format.space_after = Pt(0)
+            run_text = p_text.add_run(line)
+            _format_run(run_text, size=10)
+
+    doc.add_paragraph().paragraph_format.space_after = Pt(2)
+
+
+def _add_text_section_if_present(doc: Document, title: str, text: Any) -> None:
+    cleaned = clean_text(text)
+
+    if not cleaned:
+        return
+
+    _add_subheading(doc, title)
+    _add_multiline_text(doc, cleaned)
+
+
+def _add_multiline_text(doc: Document, text: str) -> None:
+    for line in _to_lines(text):
         p = doc.add_paragraph()
-        run = p.add_run(f"{title}: ")
-        run.bold = True
-
-    if text:
-        for line in str(text).splitlines():
-            if line.strip():
-                doc.add_paragraph(line.strip())
-    else:
-        doc.add_paragraph("—")
+        p.paragraph_format.space_after = Pt(1)
+        run = p.add_run(line)
+        _format_run(run, size=10.5)
 
 
-def _add_multiline_or_blanks(doc: Document, text: str, blank_lines: int = 3) -> None:
-    if text and text.strip():
-        for line in text.splitlines():
-            doc.add_paragraph(line)
-    else:
-        for _ in range(blank_lines):
-            doc.add_paragraph("- ")
+def _add_bullet_list(doc: Document, points: Any) -> None:
+    lines = _to_lines(points)
+
+    if not lines:
+        _add_empty_line(doc)
+        return
+
+    for line in lines:
+        _add_bullet(doc, line)
+
+
+def _add_bullet(doc: Document, text: Any) -> None:
+    cleaned = clean_text(text)
+
+    if not cleaned:
+        return
+
+    p = doc.add_paragraph(style=None)
+    p.paragraph_format.left_indent = Cm(0.35)
+    p.paragraph_format.first_line_indent = Cm(-0.15)
+    p.paragraph_format.space_after = Pt(2)
+
+    run_bullet = p.add_run("• ")
+    _format_run(run_bullet, size=10.5)
+
+    run_text = p.add_run(cleaned)
+    _format_run(run_text, size=10.5)
+
+
+def _add_empty_line(doc: Document) -> None:
+    p = doc.add_paragraph("—")
+    p.paragraph_format.space_after = Pt(2)
+    for run in p.runs:
+        _format_run(run, size=10.5)
+
+
+def _add_blank_bullets(doc: Document, count: int) -> None:
+    for _ in range(count):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(2)
+        run = p.add_run("- ")
+        _format_run(run, size=10.5)
 
 
 def _add_signature_lines(doc: Document) -> None:
+    doc.add_paragraph()
+    doc.add_paragraph()
+
     table = doc.add_table(rows=2, cols=2)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    _remove_table_borders(table)
 
-    table.rows[0].cells[0].text = "München, den ____________________"
-    table.rows[0].cells[1].text = "München, den ____________________"
+    table.cell(0, 0).text = "München, den ____________________"
+    table.cell(0, 1).text = "München, den ____________________"
+    table.cell(1, 0).text = "Marcus Müller, Seminarrektor"
+    table.cell(1, 1).text = "Unterschrift LAA"
 
-    table.rows[1].cells[0].text = "Marcus Müller, Seminarrektor"
-    table.rows[1].cells[1].text = "Unterschrift LAA"
+    for row in table.rows:
+        for cell in row.cells:
+            for p in cell.paragraphs:
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                for run in p.runs:
+                    _format_run(run, size=10)
+
+
+# ---------------------------------------------------------------------------
+# Textbereinigung
+# ---------------------------------------------------------------------------
+
+
+def clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+
+    if isinstance(value, dict):
+        value = _dict_to_readable_text(value)
+
+    if isinstance(value, list):
+        value = "\n".join(clean_text(item) for item in value if clean_text(item))
+
+    text = str(value)
+
+    # Falls ein Dictionary versehentlich als String im Word-Export landet.
+    stripped = text.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        try:
+            parsed = ast.literal_eval(stripped)
+            if isinstance(parsed, dict):
+                text = _dict_to_readable_text(parsed)
+        except Exception:
+            pass
+
+    # Markdown-Bold/Italic entfernen.
+    text = text.replace("**", "")
+    text = text.replace("__", "")
+
+    # Einzelne störende Markdown- oder Listenzeichen am Zeilenanfang bereinigen.
+    lines = []
+    for line in text.splitlines():
+        line = line.strip()
+        line = re.sub(r"^[\-•]\s*", "", line)
+        line = re.sub(r"^\d+[\.\)]\s*", "", line)
+        line = line.strip()
+
+        # Umschließende einfache oder doppelte Anführungszeichen entfernen.
+        line = line.strip("\"'")
+        lines.append(line)
+
+    text = "\n".join(lines)
+
+    # Technische Feldnamen ersetzen, falls sie doch auftauchen.
+    replacements = {
+        "positive_feststellungen": "Positive Feststellungen",
+        "beratungspunkte": "Beratungspunkte",
+        "memo": "Rohnotizen",
+        "entwurf_analyse": "Kurzanalyse des Entwurfs",
+        "zusammenfassung_weiterarbeit": "Zusammenfassung zur Weiterarbeit",
+        "_": " ",
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    # Überflüssige doppelte Leerzeichen.
+    text = re.sub(r"[ \t]+", " ", text)
+
+    return text.strip()
+
+
+def _dict_to_readable_text(data: Dict[str, Any]) -> str:
+    parts: List[str] = []
+
+    positive = data.get("positive_feststellungen")
+    beratung = data.get("beratungspunkte")
+
+    if positive:
+        parts.append(f"Positive Feststellungen:\n{clean_text(positive)}")
+
+    if beratung:
+        parts.append(f"Beratungspunkte:\n{clean_text(beratung)}")
+
+    # Sonstige Felder nur dann, wenn es nicht die internen Rohnotizen sind.
+    for key, value in data.items():
+        if key in {"positive_feststellungen", "beratungspunkte", "memo"}:
+            continue
+
+        cleaned_value = clean_text(value)
+        if cleaned_value:
+            readable_key = clean_text(key)
+            parts.append(f"{readable_key}:\n{cleaned_value}")
+
+    return "\n".join(parts)
+
+
+def _to_lines(value: Any) -> List[str]:
+    cleaned = clean_text(value)
+
+    if not cleaned:
+        return []
+
+    lines = []
+
+    for line in cleaned.splitlines():
+        line = clean_text(line)
+        if line:
+            lines.append(line)
+
+    return lines
+
+
+def _join_nonempty(values: Iterable[Any], separator: str = " / ") -> str:
+    cleaned = [clean_text(value) for value in values if clean_text(value)]
+    return separator.join(cleaned)
+
+
+# ---------------------------------------------------------------------------
+# Word-XML-Helfer
+# ---------------------------------------------------------------------------
+
+
+def _add_bottom_border(paragraph, color: str = MEDIUM_GRAY, size: str = "6") -> None:
+    p = paragraph._p
+    pPr = p.get_or_add_pPr()
+
+    pBdr = pPr.find(qn("w:pBdr"))
+    if pBdr is None:
+        pBdr = OxmlElement("w:pBdr")
+        pPr.append(pBdr)
+
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:sz"), size)
+    bottom.set(qn("w:space"), "2")
+    bottom.set(qn("w:color"), color)
+    pBdr.append(bottom)
+
+
+def _set_cell_shading(cell, fill: str) -> None:
+    tcPr = cell._tc.get_or_add_tcPr()
+    shd = tcPr.find(qn("w:shd"))
+
+    if shd is None:
+        shd = OxmlElement("w:shd")
+        tcPr.append(shd)
+
+    shd.set(qn("w:fill"), fill)
+
+
+def _set_cell_border(cell, color: str = LIGHT_GRAY) -> None:
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+
+    tcBorders = tcPr.first_child_found_in("w:tcBorders")
+    if tcBorders is None:
+        tcBorders = OxmlElement("w:tcBorders")
+        tcPr.append(tcBorders)
+
+    for edge in ("top", "left", "bottom", "right"):
+        tag = f"w:{edge}"
+        element = tcBorders.find(qn(tag))
+        if element is None:
+            element = OxmlElement(tag)
+            tcBorders.append(element)
+
+        element.set(qn("w:val"), "single")
+        element.set(qn("w:sz"), "4")
+        element.set(qn("w:space"), "0")
+        element.set(qn("w:color"), color)
+
+
+def _remove_table_borders(table) -> None:
+    tbl = table._tbl
+    tblPr = tbl.tblPr
+
+    borders = tblPr.first_child_found_in("w:tblBorders")
+    if borders is None:
+        borders = OxmlElement("w:tblBorders")
+        tblPr.append(borders)
+
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        tag = f"w:{edge}"
+        element = borders.find(qn(tag))
+        if element is None:
+            element = OxmlElement(tag)
+            borders.append(element)
+
+        element.set(qn("w:val"), "nil")
+
+
+def _clear_cell(cell) -> None:
+    for paragraph in cell.paragraphs:
+        paragraph.clear()
