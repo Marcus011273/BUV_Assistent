@@ -13,13 +13,13 @@ def has_api_key() -> bool:
 
 
 def _get_api_key() -> str | None:
-    # Lokal kann zusätzlich OPENAI_API_KEY als Umgebungsvariable genutzt werden.
     try:
         key = st.secrets.get("OPENAI_API_KEY")
         if key:
             return str(key)
     except Exception:
         pass
+
     import os
 
     return os.getenv("OPENAI_API_KEY")
@@ -27,15 +27,19 @@ def _get_api_key() -> str | None:
 
 def get_client() -> OpenAI:
     key = _get_api_key()
+
     if not key:
-        raise RuntimeError("Kein OPENAI_API_KEY gefunden. In Streamlit Cloud unter Secrets hinterlegen.")
+        raise RuntimeError(
+            "Kein OPENAI_API_KEY gefunden. In Streamlit Cloud unter Secrets hinterlegen."
+        )
+
     return OpenAI(api_key=key)
 
 
 def extract_text_from_upload(uploaded_file: Any) -> str:
-    """Liest PDF/TXT grob aus. DOCX-Unterstützung kann später ergänzt werden."""
     if uploaded_file is None:
         return ""
+
     name = (uploaded_file.name or "").lower()
     data = uploaded_file.getvalue()
 
@@ -44,8 +48,10 @@ def extract_text_from_upload(uploaded_file: Any) -> str:
 
         reader = PdfReader(BytesIO(data))
         parts: List[str] = []
+
         for page in reader.pages:
             parts.append(page.extract_text() or "")
+
         return "\n".join(parts).strip()
 
     if name.endswith(".txt"):
@@ -64,7 +70,9 @@ def extract_text_from_upload(uploaded_file: Any) -> str:
 def analyze_draft_short(draft_text: str) -> List[str]:
     prompt = f"""
 Du bist ein erfahrener Seminarrektor für das Lehramt Mittelschule in Bayern.
+
 Analysiere den folgenden Unterrichtsentwurf knapp in höchstens 5 Stichpunkten.
+
 Beziehe dich nur auf diese Bereiche:
 - Vorüberlegungen
 - Anbindung an den Lehrplan
@@ -72,20 +80,24 @@ Beziehe dich nur auf diese Bereiche:
 - Formulierung der Kompetenzerwartungen
 - Artikulation
 
-Formuliere sachlich, knapp und beratungsorientiert. Keine langen Absätze.
+Formuliere sachlich, knapp und beratungsorientiert.
+Keine langen Absätze.
 
 UNTERRICHTSENTWURF:
 {draft_text[:30000]}
 """
+
     text = _chat(prompt)
     return _split_bullets(text, max_items=5)
 
 
 def summarize_observations(protocol: Dict[str, Any], buv_type: str) -> str:
     context = json.dumps(protocol, ensure_ascii=False, indent=2)
+
     prompt = f"""
 Du bist ein erfahrener Seminarrektor für das Lehramt Mittelschule in Bayern.
-Formuliere aus den folgenden Rohnotizen aussagekräftige Beratungsschwerpunkte zur Weiterarbeit.
+
+Formuliere aus den folgenden Notizen aussagekräftige Beratungsschwerpunkte zur Weiterarbeit.
 
 BUV-Art: {buv_type}
 
@@ -101,7 +113,69 @@ Regeln:
 DATEN:
 {context[:50000]}
 """
+
     return _chat(prompt)
+
+
+def convert_memos_to_beratungspunkte(
+    observation_grid: Dict[str, Dict[str, str]],
+    context_label: str,
+) -> Dict[str, str]:
+    """Formuliert Rohnotizen/Memos kriterienbezogen zu Beratungspunkten um.
+
+    Rückgabe:
+    {
+      "Strukturierung / roter Faden": "- ...\\n- ...",
+      "Zielorientierung": "- ...",
+      ...
+    }
+    """
+
+    prompt = f"""
+Du bist ein erfahrener Seminarrektor für das Lehramt Mittelschule in Bayern.
+
+Formuliere aus den folgenden Rohnotizen und ggf. bereits vorhandenen Beratungspunkten
+prägnante Beratungspunkte für ein Protokoll zur Besonderen Unterrichtsvorbereitung.
+
+Kontext:
+{context_label}
+
+Regeln:
+- Formuliere sachlich, klar und entwicklungsorientiert.
+- Formuliere stichpunktartig.
+- Maximal 2 Stichpunkte pro Kriterium.
+- Keine langen Absätze.
+- Keine Rohnotizen übernehmen.
+- Keine Dopplungen.
+- Wenn zu einem Kriterium keine sinnvollen Rohnotizen oder Beratungshinweise vorliegen,
+  gib für dieses Kriterium einen leeren String zurück.
+- Gib ausschließlich valides JSON zurück.
+- Die JSON-Schlüssel müssen exakt den Kriterien entsprechen.
+
+DATEN:
+{json.dumps(observation_grid, ensure_ascii=False, indent=2)}
+"""
+
+    raw = _chat(prompt)
+    cleaned = _strip_json_fences(raw)
+
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items()}
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+
+        if start != -1 and end != -1 and end > start:
+            try:
+                data = json.loads(cleaned[start : end + 1])
+                if isinstance(data, dict):
+                    return {str(k): str(v) for k, v in data.items()}
+            except json.JSONDecodeError:
+                pass
+
+    raise RuntimeError("Die KI konnte keine gültigen Beratungspunkte im JSON-Format zurückgeben.")
 
 
 def extract_metadata_from_draft(draft_text: str) -> Dict[str, str]:
@@ -112,22 +186,26 @@ Gib ausschließlich valides JSON zurück. Keine Erklärungen.
 Felder:
 laa_name, datum, schule, fach, klasse, thema, buv_art
 
-buv_art soll einer dieser Werte sein: Einzel-BUV, Doppel-BUV, unbekannt.
+buv_art soll einer dieser Werte sein:
+Einzel-BUV, Doppel-BUV, unbekannt.
+
 Wenn ein Feld nicht erkennbar ist, nutze einen leeren String.
 
 UNTERRICHTSENTWURF:
 {draft_text[:25000]}
 """
+
     raw = _chat(prompt)
     cleaned = _strip_json_fences(raw)
+
     try:
         data = json.loads(cleaned)
         if isinstance(data, dict):
             return {str(k): str(v) for k, v in data.items()}
     except json.JSONDecodeError:
-        # Fallback: ersten JSON-Block zwischen { und } versuchen
         start = cleaned.find("{")
         end = cleaned.rfind("}")
+
         if start != -1 and end != -1 and end > start:
             try:
                 data = json.loads(cleaned[start : end + 1])
@@ -135,43 +213,63 @@ UNTERRICHTSENTWURF:
                     return {str(k): str(v) for k, v in data.items()}
             except json.JSONDecodeError:
                 pass
+
     return {}
 
 
 def _strip_json_fences(text: str) -> str:
     text = (text or "").strip()
+
     if text.startswith("```"):
         lines = text.splitlines()
+
         if lines and lines[0].strip().startswith("```"):
             lines = lines[1:]
+
         if lines and lines[-1].strip().startswith("```"):
             lines = lines[:-1]
+
         text = "\n".join(lines).strip()
+
     if text.lower().startswith("json"):
         text = text[4:].strip()
+
     return text
 
 
 def _chat(prompt: str) -> str:
     client = get_client()
+
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "Du formulierst präzise, sachlich und auf Deutsch."},
-            {"role": "user", "content": prompt},
+            {
+                "role": "system",
+                "content": "Du formulierst präzise, sachlich und auf Deutsch.",
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
         ],
         temperature=0.2,
     )
+
     return response.choices[0].message.content or ""
 
 
 def _split_bullets(text: str, max_items: int = 5) -> List[str]:
     lines = []
+
     for line in text.splitlines():
         line = line.strip()
+
         if not line:
             continue
+
         line = line.lstrip("-•0123456789. )\t")
+
         if line:
             lines.append(line)
+
     return lines[:max_items]
