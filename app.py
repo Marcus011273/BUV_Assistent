@@ -4,6 +4,7 @@ import streamlit as st
 
 from modules.ai_client import (
     analyze_draft_short,
+    convert_memos_to_beratungspunkte,
     extract_metadata_from_draft,
     extract_text_from_upload,
     has_api_key,
@@ -98,6 +99,7 @@ with st.sidebar:
     )
 
     st.divider()
+
     if has_api_key():
         st.success("KI-Schlüssel gefunden")
     else:
@@ -146,8 +148,10 @@ def edit_observation_grid(grid: dict, prefix: str) -> None:
                 "memo": "",
             },
         )
+
         with st.expander(kriterium, expanded=False):
             c1, c2, c3 = st.columns(3)
+
             with c1:
                 text_area(
                     "Positive Feststellungen",
@@ -155,6 +159,7 @@ def edit_observation_grid(grid: dict, prefix: str) -> None:
                     "positive_feststellungen",
                     key=f"{prefix}_{kriterium}_pos",
                 )
+
             with c2:
                 text_area(
                     "Beratungspunkte",
@@ -162,6 +167,7 @@ def edit_observation_grid(grid: dict, prefix: str) -> None:
                     "beratungspunkte",
                     key=f"{prefix}_{kriterium}_ber",
                 )
+
             with c3:
                 text_area(
                     "Memo / Rohnotizen",
@@ -169,6 +175,14 @@ def edit_observation_grid(grid: dict, prefix: str) -> None:
                     "memo",
                     key=f"{prefix}_{kriterium}_memo",
                 )
+
+
+def apply_ai_beratungspunkte_to_grid(grid: dict, context_label: str) -> None:
+    result = convert_memos_to_beratungspunkte(grid, context_label)
+
+    for kriterium, text in result.items():
+        if kriterium in grid and text.strip():
+            grid[kriterium]["beratungspunkte"] = text.strip()
 
 
 def apply_metadata(meta: dict, target: str) -> None:
@@ -183,6 +197,7 @@ def apply_metadata(meta: dict, target: str) -> None:
 
     if target == "einzel":
         einzel = protocol["einzel_buv"]
+
         for source, dest in [
             ("datum", "datum"),
             ("fach", "fach"),
@@ -192,21 +207,22 @@ def apply_metadata(meta: dict, target: str) -> None:
             if meta.get(source):
                 einzel[dest] = meta[source]
 
-    elif target == "doppel":
+    elif target in ["doppel_1", "doppel_2"]:
         doppel = protocol["doppel_buv"]
 
         if meta.get("datum"):
             doppel["datum"] = meta["datum"]
 
-        # Fach/Klasse/Thema zunächst in Stunde 1 eintragen; du kannst es danach ändern.
-        stunde_1 = doppel["stunde_1"]
+        stunde_key = "stunde_1" if target == "doppel_1" else "stunde_2"
+        stunde = doppel[stunde_key]
+
         for source, dest in [
             ("fach", "fach"),
             ("klasse", "klasse"),
             ("thema", "thema"),
         ]:
             if meta.get(source):
-                stunde_1[dest] = meta[source]
+                stunde[dest] = meta[source]
 
 
 def draft_upload_section(target: dict, label: str, metadata_target: str) -> None:
@@ -277,7 +293,11 @@ with tabs[0]:
 
         current_buv_nummer = str(stammdaten.get("buv_nummer", "1"))
         buv_options = ["1", "2", "3", "4"]
-        current_index = buv_options.index(current_buv_nummer) if current_buv_nummer in buv_options else 0
+        current_index = (
+            buv_options.index(current_buv_nummer)
+            if current_buv_nummer in buv_options
+            else 0
+        )
 
         stammdaten["buv_nummer"] = st.selectbox(
             "Nummer der Besonderen Unterrichtsvorbereitung",
@@ -343,6 +363,17 @@ with tabs[1]:
 
     edit_observation_grid(einzel["beobachtungen"], "einzel")
 
+    if st.button("Rohnotizen der Einzel-BUV in Beratungspunkte umwandeln", key="convert_einzel_memos"):
+        try:
+            apply_ai_beratungspunkte_to_grid(
+                einzel["beobachtungen"],
+                "Einzel-BUV",
+            )
+            persist_protocol()
+            rerun_with_fresh_widgets("Rohnotizen wurden in Beratungspunkte umgewandelt.")
+        except Exception as exc:
+            st.error(f"KI-Fehler: {exc}")
+
     if st.button("Notizen zur Einzel-BUV verdichten", key="summarize_einzel"):
         try:
             einzel["zusammenfassung_weiterarbeit"] = summarize_observations(
@@ -378,32 +409,22 @@ with tabs[2]:
 
     doppel = protocol["doppel_buv"]
 
-    draft_upload_section(doppel, "Vor dem Unterrichtsbesuch", "doppel")
-
     text_input("Datum der Doppel-BUV", doppel, "datum", key="doppel_datum")
 
-    st.subheader("Kurzanalyse des Entwurfs")
-
-    doppel_analyse_value = (
-        "\n".join(doppel.get("entwurf_analyse", []))
-        if isinstance(doppel.get("entwurf_analyse"), list)
-        else str(doppel.get("entwurf_analyse", ""))
-    )
-
-    doppel["entwurf_analyse"] = st.text_area(
-        "Maximal 5 Stichpunkte, je Zeile ein Punkt",
-        value=doppel_analyse_value,
-        height=140,
-        key=widget_key("doppel_analyse_text"),
-    ).splitlines()
-
-    for stunde_key, label in [
-        ("stunde_1", "Doppel-BUV – 1. Stunde"),
-        ("stunde_2", "Doppel-BUV – 2. Stunde"),
+    for stunde_key, label, metadata_target in [
+        ("stunde_1", "Doppel-BUV – 1. Stunde", "doppel_1"),
+        ("stunde_2", "Doppel-BUV – 2. Stunde", "doppel_2"),
     ]:
+        st.divider()
         st.subheader(label)
 
         stunde = doppel[stunde_key]
+
+        draft_upload_section(
+            stunde,
+            f"Entwurf hochladen – {label}",
+            metadata_target,
+        )
 
         c1, c2, c3 = st.columns(3)
 
@@ -416,7 +437,42 @@ with tabs[2]:
         with c3:
             text_input("Thema", stunde, "thema", key=f"{stunde_key}_thema")
 
+        st.subheader(f"Kurzanalyse des Entwurfs – {label}")
+
+        analyse_value = (
+            "\n".join(stunde.get("entwurf_analyse", []))
+            if isinstance(stunde.get("entwurf_analyse"), list)
+            else str(stunde.get("entwurf_analyse", ""))
+        )
+
+        stunde["entwurf_analyse"] = st.text_area(
+            "Maximal 5 Stichpunkte, je Zeile ein Punkt",
+            value=analyse_value,
+            height=140,
+            key=widget_key(f"{stunde_key}_analyse_text"),
+        ).splitlines()
+
+        st.subheader(f"Beobachtungen – {label}")
+
         edit_observation_grid(stunde["beobachtungen"], stunde_key)
+
+        if st.button(
+            f"Rohnotizen {label} in Beratungspunkte umwandeln",
+            key=f"convert_{stunde_key}_memos",
+        ):
+            try:
+                apply_ai_beratungspunkte_to_grid(
+                    stunde["beobachtungen"],
+                    label,
+                )
+                persist_protocol()
+                rerun_with_fresh_widgets(
+                    f"Rohnotizen aus {label} wurden in Beratungspunkte umgewandelt."
+                )
+            except Exception as exc:
+                st.error(f"KI-Fehler: {exc}")
+
+    st.divider()
 
     if st.button("Notizen zur Doppel-BUV verdichten", key="summarize_doppel"):
         try:
