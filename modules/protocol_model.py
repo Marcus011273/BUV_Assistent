@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import date
 from typing import Any, Dict, List
 
+
 KRITERIEN: List[str] = [
     "Strukturierung / roter Faden",
     "Zielorientierung",
@@ -31,8 +32,9 @@ def empty_observation_grid() -> Dict[str, Dict[str, str]]:
 
 def create_empty_protocol() -> Dict[str, Any]:
     today = date.today().isoformat()
+
     return {
-        "schema_version": "0.1",
+        "schema_version": "0.2",
         "protokoll_typ": "Besondere Unterrichtsvorbereitung",
         "erstellt_am": today,
         "zuletzt_bearbeitet": today,
@@ -55,17 +57,18 @@ def create_empty_protocol() -> Dict[str, Any]:
         },
         "doppel_buv": {
             "datum": "",
-            "entwurf_analyse": [],
             "stunde_1": {
                 "fach": "",
                 "klasse": "",
                 "thema": "",
+                "entwurf_analyse": [],
                 "beobachtungen": empty_observation_grid(),
             },
             "stunde_2": {
                 "fach": "",
                 "klasse": "",
                 "thema": "",
+                "entwurf_analyse": [],
                 "beobachtungen": empty_observation_grid(),
             },
             "zusammenfassung_weiterarbeit": "",
@@ -87,7 +90,6 @@ def ensure_protocol_shape(protocol: Dict[str, Any]) -> Dict[str, Any]:
     base = create_empty_protocol()
     merged = _deep_merge(base, protocol or {})
 
-    # Beobachtungsraster absichern, falls Kriterien später ergänzt wurden.
     for path in [
         ("einzel_buv", "beobachtungen"),
         ("doppel_buv", "stunde_1", "beobachtungen"),
@@ -96,24 +98,35 @@ def ensure_protocol_shape(protocol: Dict[str, Any]) -> Dict[str, Any]:
         grid = merged
         for key in path:
             grid = grid[key]
+
         for kriterium in KRITERIEN:
             grid.setdefault(
                 kriterium,
-                {"positive_feststellungen": "", "beratungspunkte": "", "memo": ""},
+                {
+                    "positive_feststellungen": "",
+                    "beratungspunkte": "",
+                    "memo": "",
+                },
             )
             grid[kriterium].setdefault("positive_feststellungen", "")
             grid[kriterium].setdefault("beratungspunkte", "")
             grid[kriterium].setdefault("memo", "")
 
+    merged["doppel_buv"]["stunde_1"].setdefault("entwurf_analyse", [])
+    merged["doppel_buv"]["stunde_2"].setdefault("entwurf_analyse", [])
+
     merged["zuletzt_bearbeitet"] = date.today().isoformat()
+
     return merged
 
 
 def _deep_merge(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
     result = deepcopy(base)
+
     for key, value in updates.items():
         if isinstance(value, dict) and isinstance(result.get(key), dict):
             result[key] = _deep_merge(result[key], value)
         else:
             result[key] = value
+
     return result
