@@ -19,6 +19,28 @@ KRITERIEN: List[str] = [
 ]
 
 
+SCHRIFTWESEN_ITEMS: List[str] = [
+    "Jahrespläne",
+    "Sequenzpläne",
+    "Wochenpläne",
+    "Unterrichtsvorbereitungen",
+    "Material zum aktiven / handlungsorientierten Lernen",
+    "Einsatz von Hörtexten, Film, PC",
+    "Notenlisten, Notengebung",
+    "Kriterien für mdl. Noten",
+    "Deckblatt Proben",
+    "Gestaltung Proben",
+    "Korrektur der Hefte",
+    "Anzahl/Gestaltung der Hefteinträge",
+    "Schülerbeobachtungen",
+    "Gesprächsprotokolle/Elternkontakte",
+    "Individuelle Erziehungsmaßnahmen",
+    "Bilder aus dem Kunstunterricht",
+    "Kriterien zur Benotung",
+    "Klassenzimmergestaltung",
+]
+
+
 def empty_observation_grid() -> Dict[str, Dict[str, str]]:
     return {
         kriterium: {
@@ -30,11 +52,21 @@ def empty_observation_grid() -> Dict[str, Dict[str, str]]:
     }
 
 
+def empty_schriftwesen() -> Dict[str, Dict[str, str]]:
+    return {
+        item: {
+            "status": "OK",
+            "bemerkung": "",
+        }
+        for item in SCHRIFTWESEN_ITEMS
+    }
+
+
 def create_empty_protocol() -> Dict[str, Any]:
     today = date.today().isoformat()
 
     return {
-        "schema_version": "0.2",
+        "schema_version": "0.3",
         "protokoll_typ": "Besondere Unterrichtsvorbereitung",
         "erstellt_am": today,
         "zuletzt_bearbeitet": today,
@@ -79,6 +111,7 @@ def create_empty_protocol() -> Dict[str, Any]:
                 "positive_feststellungen": "",
                 "beratungspunkte": "",
             },
+            "schriftwesen": empty_schriftwesen(),
             "handlungs_und_sachkompetenz": "",
             "einbringen_schule_und_seminar": "",
         },
@@ -114,6 +147,14 @@ def ensure_protocol_shape(protocol: Dict[str, Any]) -> Dict[str, Any]:
 
     merged["doppel_buv"]["stunde_1"].setdefault("entwurf_analyse", [])
     merged["doppel_buv"]["stunde_2"].setdefault("entwurf_analyse", [])
+
+    kompetenzen = merged.setdefault("kompetenzen", {})
+    schriftwesen = kompetenzen.setdefault("schriftwesen", {})
+
+    for item in SCHRIFTWESEN_ITEMS:
+        schriftwesen.setdefault(item, {"status": "OK", "bemerkung": ""})
+        schriftwesen[item].setdefault("status", "OK")
+        schriftwesen[item].setdefault("bemerkung", "")
 
     merged["zuletzt_bearbeitet"] = date.today().isoformat()
 
