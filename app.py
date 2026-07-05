@@ -10,7 +10,12 @@ from modules.ai_client import (
     has_api_key,
     summarize_observations,
 )
-from modules.protocol_model import KRITERIEN, create_empty_protocol, ensure_protocol_shape
+from modules.protocol_model import (
+    KRITERIEN,
+    SCHRIFTWESEN_ITEMS,
+    create_empty_protocol,
+    ensure_protocol_shape,
+)
 from modules.storage import build_base_filename, load_protocol_from_bytes, protocol_to_json_bytes
 from modules.word_export import create_word_document
 
@@ -194,6 +199,47 @@ def apply_ai_beratungspunkte_to_grid(grid: dict, context_label: str) -> None:
         if kriterium in grid and text.strip():
             grid[kriterium]["beratungspunkte"] = text.strip()
 
+def edit_schriftwesen_table(kompetenzen: dict) -> None:
+    schriftwesen = kompetenzen.setdefault("schriftwesen", {})
+
+    st.subheader("Handlungs- und Sachkompetenz – Schriftwesen")
+    st.caption("Das Datum wird im Word-Dokument automatisch aus dem Datum der Doppel-BUV übernommen.")
+
+    header_cols = st.columns([3.5, 1.2, 3.5])
+    header_cols[0].markdown("**Bereich**")
+    header_cols[1].markdown("**Status**")
+    header_cols[2].markdown("**Bemerkung**")
+
+    status_options = ["OK", "fehlt", "--"]
+
+    for index, item in enumerate(SCHRIFTWESEN_ITEMS):
+        row = schriftwesen.setdefault(item, {"status": "OK", "bemerkung": ""})
+        current_status = row.get("status", "OK")
+
+        if current_status not in status_options:
+            current_status = "OK"
+
+        cols = st.columns([3.5, 1.2, 3.5])
+
+        with cols[0]:
+            st.write(item)
+
+        with cols[1]:
+            row["status"] = st.selectbox(
+                "Status",
+                status_options,
+                index=status_options.index(current_status),
+                key=widget_key(f"schriftwesen_status_{index}"),
+                label_visibility="collapsed",
+            )
+
+        with cols[2]:
+            row["bemerkung"] = st.text_input(
+                "Bemerkung",
+                value=row.get("bemerkung", ""),
+                key=widget_key(f"schriftwesen_bemerkung_{index}"),
+                label_visibility="collapsed",
+            )
 
 def apply_metadata(meta: dict, target: str) -> None:
     """Übernimmt erkannte Stammdaten aus der KI-Antwort ins Protokoll."""
@@ -291,41 +337,54 @@ tabs = st.tabs(
 )
 
 
-with tabs[0]:
-    st.header("Stammdaten")
+with tabs[3]:
+    st.header("Kompetenzen")
 
-    stammdaten = protocol["stammdaten"]
+    kompetenzen = protocol["kompetenzen"]
+    erzieh = kompetenzen["erzieherische_kompetenz"]
+
+    st.subheader("Erzieherische Kompetenz")
 
     c1, c2 = st.columns(2)
 
     with c1:
-        text_input("Name LAA", stammdaten, "laa_name", key="stamm_laa")
-
-        current_buv_nummer = str(stammdaten.get("buv_nummer", "1"))
-        buv_options = ["1", "2", "3", "4"]
-        current_index = (
-            buv_options.index(current_buv_nummer)
-            if current_buv_nummer in buv_options
-            else 0
-        )
-
-        stammdaten["buv_nummer"] = st.selectbox(
-            "Nummer der Besonderen Unterrichtsvorbereitung",
-            buv_options,
-            index=current_index,
-            key=widget_key("stamm_buv_nummer"),
+        text_area(
+            "Positive Feststellungen",
+            erzieh,
+            "positive_feststellungen",
+            height=160,
+            key="erz_pos",
         )
 
     with c2:
-        text_input("Seminarjahr", stammdaten, "seminarjahr", key="stamm_seminarjahr")
-        text_input("Schule", stammdaten, "schule", key="stamm_schule")
+        text_area(
+            "Beratungspunkte",
+            erzieh,
+            "beratungspunkte",
+            height=160,
+            key="erz_ber",
+        )
+
+    st.divider()
+
+    edit_schriftwesen_table(kompetenzen)
 
     text_area(
-        "Bemerkungen",
-        stammdaten,
-        "bemerkungen",
-        height=100,
-        key="stamm_bemerkungen",
+        "Weitere Hinweise zur Handlungs- und Sachkompetenz",
+        kompetenzen,
+        "handlungs_und_sachkompetenz",
+        height=120,
+        key="hand_sach",
+    )
+
+    st.divider()
+
+    text_area(
+        "Einbringen in Schule und Seminar",
+        kompetenzen,
+        "einbringen_schule_und_seminar",
+        height=160,
+        key="einbringen",
     )
 
     save_back()
