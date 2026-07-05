@@ -555,6 +555,56 @@ def clean_text(value: Any) -> str:
     return text.strip()
 
 
+def _normalize_observation_fields(raw_fields: Any) -> Dict[str, str]:
+    """Sorgt dafür, dass Beobachtungsfelder immer als sauberes Dictionary vorliegen.
+
+    Manchmal kann durch KI-Ausgaben oder ältere JSON-Stände ein Feld nicht als dict,
+    sondern als Text/String gespeichert sein. Diese Funktion verhindert technische
+    Ausgaben wie {'positive_feststellungen': ...} im Word-Dokument.
+    """
+    if raw_fields is None:
+        return {
+            "positive_feststellungen": "",
+            "beratungspunkte": "",
+            "memo": "",
+        }
+
+    if isinstance(raw_fields, dict):
+        return {
+            "positive_feststellungen": clean_text(raw_fields.get("positive_feststellungen", "")),
+            "beratungspunkte": clean_text(raw_fields.get("beratungspunkte", "")),
+            "memo": clean_text(raw_fields.get("memo", "")),
+        }
+
+    if isinstance(raw_fields, str):
+        stripped = raw_fields.strip()
+
+        # Falls ein Dictionary versehentlich als String gespeichert wurde.
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                parsed = ast.literal_eval(stripped)
+                if isinstance(parsed, dict):
+                    return {
+                        "positive_feststellungen": clean_text(parsed.get("positive_feststellungen", "")),
+                        "beratungspunkte": clean_text(parsed.get("beratungspunkte", "")),
+                        "memo": clean_text(parsed.get("memo", "")),
+                    }
+            except Exception:
+                pass
+
+        # Falls es nur freier Text ist, behandeln wir ihn als Beratungspunkt.
+        return {
+            "positive_feststellungen": "",
+            "beratungspunkte": clean_text(raw_fields),
+            "memo": "",
+        }
+
+    return {
+        "positive_feststellungen": "",
+        "beratungspunkte": clean_text(raw_fields),
+        "memo": "",
+    }
+
 def _dict_to_readable_text(data: Dict[str, Any]) -> str:
     parts: List[str] = []
 
