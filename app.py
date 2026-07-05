@@ -79,13 +79,23 @@ with st.sidebar:
         st.session_state.protocol = create_empty_protocol()
         rerun_with_fresh_widgets("Neues Protokoll angelegt.")
 
-    uploaded_json = st.file_uploader("JSON-Arbeitsstand hochladen", type=["json"])
+    uploaded_json = st.file_uploader(
+        "JSON-Arbeitsstand hochladen",
+        type=["json"],
+        key="json_upload",
+    )
+
     if uploaded_json is not None:
-        try:
-            st.session_state.protocol = load_protocol_from_bytes(uploaded_json.getvalue())
-            rerun_with_fresh_widgets("Arbeitsstand geladen.")
-        except ValueError as exc:
-            st.error(str(exc))
+        st.info(f"Ausgewählte Datei: {uploaded_json.name}")
+
+        if st.button("Arbeitsstand aus JSON übernehmen", use_container_width=True):
+            try:
+                st.session_state.protocol = load_protocol_from_bytes(uploaded_json.getvalue())
+                rerun_with_fresh_widgets("Arbeitsstand aus JSON übernommen.")
+            except ValueError as exc:
+                st.error(str(exc))
+            except Exception as exc:
+                st.error(f"Arbeitsstand konnte nicht geladen werden: {exc}")
 
     protocol = st.session_state.protocol
     base_name = build_base_filename(protocol)
