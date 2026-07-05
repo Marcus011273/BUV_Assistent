@@ -523,13 +523,19 @@ def clean_text(value: Any) -> str:
     text = text.replace("__", "")
 
     # Einzelne störende Markdown- oder Listenzeichen am Zeilenanfang bereinigen.
+    # Wichtig: Datumsangaben wie 12.05.2026 dürfen nicht als nummerierte Liste behandelt werden.
     lines = []
     for line in text.splitlines():
         line = line.strip()
         line = re.sub(r"^[\-•]\s*", "", line)
-        line = re.sub(r"^\d+[\.\)]\s*", "", line)
+    
+        # Nummerierte Listen wie "1. Text" oder "1) Text" bereinigen,
+        # aber Datumsangaben wie "12.05.2026" unverändert lassen.
+        if not re.match(r"^\d{1,2}\.\d{1,2}\.\d{2,4}$", line):
+            line = re.sub(r"^\d+[\.\)]\s+", "", line)
+    
         line = line.strip()
-
+    
         # Umschließende einfache oder doppelte Anführungszeichen entfernen.
         line = line.strip("\"'")
         lines.append(line)
