@@ -12,7 +12,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Inches, Pt, RGBColor
-
+from modules.protocol_model import SCHRIFTWESEN_ITEMS
 
 BLACK = RGBColor(0, 0, 0)
 LIGHT_GRAY = "D9D9D9"
@@ -300,7 +300,8 @@ def _add_section_doppel_buv(doc: Document, doppel: Dict[str, Any]) -> None:
         _add_observations(doc, stunde.get("beobachtungen", {}))
 
 
-def _add_section_kompetenzen(doc: Document, kompetenzen: Dict[str, Any]) -> None:
+def _add_section_kompetenzen(doc: Document, protocol: Dict[str, Any]) -> None:
+    kompetenzen = protocol.get("kompetenzen", {})
     erzieh = kompetenzen.get("erzieherische_kompetenz", {})
 
     _add_criteria_box(
@@ -312,9 +313,12 @@ def _add_section_kompetenzen(doc: Document, kompetenzen: Dict[str, Any]) -> None
         ],
     )
 
+    _add_section_heading(doc, "Handlungs- und Sachkompetenz")
+    _add_schriftwesen_table(doc, protocol)
+
     _add_text_section_if_present(
         doc,
-        "Handlungs- und Sachkompetenz",
+        "Weitere Hinweise zur Handlungs- und Sachkompetenz",
         kompetenzen.get("handlungs_und_sachkompetenz", ""),
     )
 
