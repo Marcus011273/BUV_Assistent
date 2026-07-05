@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from docx import Document
-from docx.enum.section import WD_SECTION
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
@@ -118,8 +117,10 @@ def _add_header(doc: Document) -> None:
 
     p = left_cell.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
     run = p.add_run("Seminar 45.2 München Stadt\n")
     _format_run(run, size=9, bold=False)
+
     run = p.add_run("Seminarleitung: Marcus Müller, Seminarrektor")
     _format_run(run, size=9, bold=False)
 
@@ -131,7 +132,6 @@ def _add_header(doc: Document) -> None:
             run_logo = p_logo.add_run()
             run_logo.add_picture(str(logo_path), width=Cm(2.3))
         except Exception:
-            # Falls das Logo nicht eingefügt werden kann, bleibt die Kopfzeile ohne Logo.
             pass
 
     _remove_table_borders(table)
@@ -147,6 +147,37 @@ def _find_logo_path() -> Path | None:
         Path(__file__).resolve().parent.parent / "seminar_logo.png",
         Path(__file__).resolve().parent.parent / "assets" / "Seminar 45.2.png",
         Path(__file__).resolve().parent.parent / "assets" / "seminar_logo.png",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+def _find_signature_path() -> Path | None:
+    candidates = [
+        Path("Digitale Unterschrift.png"),
+        Path("digitale_unterschrift.png"),
+        Path("unterschrift.png"),
+        Path("Unterschrift.png"),
+        Path("signature.png"),
+        Path("assets") / "Digitale Unterschrift.png",
+        Path("assets") / "digitale_unterschrift.png",
+        Path("assets") / "unterschrift.png",
+        Path("assets") / "Unterschrift.png",
+        Path("assets") / "signature.png",
+        Path(__file__).resolve().parent.parent / "Digitale Unterschrift.png",
+        Path(__file__).resolve().parent.parent / "digitale_unterschrift.png",
+        Path(__file__).resolve().parent.parent / "unterschrift.png",
+        Path(__file__).resolve().parent.parent / "Unterschrift.png",
+        Path(__file__).resolve().parent.parent / "signature.png",
+        Path(__file__).resolve().parent.parent / "assets" / "Digitale Unterschrift.png",
+        Path(__file__).resolve().parent.parent / "assets" / "digitale_unterschrift.png",
+        Path(__file__).resolve().parent.parent / "assets" / "unterschrift.png",
+        Path(__file__).resolve().parent.parent / "assets" / "Unterschrift.png",
+        Path(__file__).resolve().parent.parent / "assets" / "signature.png",
     ]
 
     for candidate in candidates:
@@ -212,7 +243,10 @@ def _add_stammdaten_block(doc: Document, protocol: Dict[str, Any]) -> None:
         ("Seminarjahr", stammdaten.get("seminarjahr", "")),
         ("Schule", stammdaten.get("schule", "")),
         ("Datum Einzel-BUV", einzel.get("datum", "")),
-        ("Fach / Klasse Einzel-BUV", _join_nonempty([einzel.get("fach", ""), einzel.get("klasse", "")], " / ")),
+        (
+            "Fach / Klasse Einzel-BUV",
+            _join_nonempty([einzel.get("fach", ""), einzel.get("klasse", "")], " / "),
+        ),
         ("Thema Einzel-BUV", einzel.get("thema", "")),
         ("Datum Doppel-BUV", doppel.get("datum", "")),
         (
@@ -252,7 +286,11 @@ def _add_section_doppel_buv(doc: Document, doppel: Dict[str, Any]) -> None:
 
         _add_subheading(doc, label)
 
-        _add_label_value_line(doc, "Fach / Klasse", _join_nonempty([stunde.get("fach", ""), stunde.get("klasse", "")], " / "))
+        _add_label_value_line(
+            doc,
+            "Fach / Klasse",
+            _join_nonempty([stunde.get("fach", ""), stunde.get("klasse", "")], " / "),
+        )
         _add_label_value_line(doc, "Thema", stunde.get("thema", ""))
 
         _add_subheading(doc, f"Kurzanalyse des Entwurfs – {label}")
@@ -474,14 +512,45 @@ def _add_signature_lines(doc: Document) -> None:
     doc.add_paragraph()
     doc.add_paragraph()
 
-    table = doc.add_table(rows=2, cols=2)
+    table = doc.add_table(rows=3, cols=2)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     _remove_table_borders(table)
 
+    # Datumszeile
     table.cell(0, 0).text = "München, den ____________________"
     table.cell(0, 1).text = "München, den ____________________"
-    table.cell(1, 0).text = "Marcus Müller, Seminarrektor"
-    table.cell(1, 1).text = "Unterschrift LAA"
+
+    # Unterschriftsbild links einfügen
+    signature_path = _find_signature_path()
+
+    left_signature_cell = table.cell(1, 0)
+    right_signature_cell = table.cell(1, 1)
+
+    _clear_cell(left_signature_cell)
+    _clear_cell(right_signature_cell)
+
+    p_sig = left_signature_cell.paragraphs[0]
+    p_sig.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    if signature_path:
+        try:
+            run_sig = p_sig.add_run()
+            run_sig.add_picture(str(signature_path), width=Cm(4.0))
+        except Exception:
+            fallback = p_sig.add_run("________________________")
+            _format_run(fallback, size=10)
+    else:
+        fallback = p_sig.add_run("________________________")
+        _format_run(fallback, size=10)
+
+    p_laa = right_signature_cell.paragraphs[0]
+    p_laa.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run_laa = p_laa.add_run("________________________")
+    _format_run(run_laa, size=10)
+
+    # Namenszeile
+    table.cell(2, 0).text = "Marcus Müller, Seminarrektor"
+    table.cell(2, 1).text = "Unterschrift LAA"
 
     for row in table.rows:
         for cell in row.cells:
@@ -528,34 +597,31 @@ def clean_text(value: Any) -> str:
     for line in text.splitlines():
         line = line.strip()
         line = re.sub(r"^[\-•]\s*", "", line)
-    
+
         # Nummerierte Listen wie "1. Text" oder "1) Text" bereinigen,
         # aber Datumsangaben wie "12.05.2026" unverändert lassen.
         if not re.match(r"^\d{1,2}\.\d{1,2}\.\d{2,4}$", line):
             line = re.sub(r"^\d+[\.\)]\s+", "", line)
-    
+
         line = line.strip()
-    
+
         # Umschließende einfache oder doppelte Anführungszeichen entfernen.
         line = line.strip("\"'")
         lines.append(line)
 
     text = "\n".join(lines)
 
-    # Technische Feldnamen ersetzen, falls sie doch auftauchen.
     replacements = {
         "positive_feststellungen": "Positive Feststellungen",
         "beratungspunkte": "Beratungspunkte",
         "memo": "Rohnotizen",
         "entwurf_analyse": "Kurzanalyse des Entwurfs",
         "zusammenfassung_weiterarbeit": "Zusammenfassung zur Weiterarbeit",
-        "_": " ",
     }
 
     for old, new in replacements.items():
         text = text.replace(old, new)
 
-    # Überflüssige doppelte Leerzeichen.
     text = re.sub(r"[ \t]+", " ", text)
 
     return text.strip()
@@ -585,7 +651,6 @@ def _normalize_observation_fields(raw_fields: Any) -> Dict[str, str]:
     if isinstance(raw_fields, str):
         stripped = raw_fields.strip()
 
-        # Falls ein Dictionary versehentlich als String gespeichert wurde.
         if stripped.startswith("{") and stripped.endswith("}"):
             try:
                 parsed = ast.literal_eval(stripped)
@@ -598,7 +663,6 @@ def _normalize_observation_fields(raw_fields: Any) -> Dict[str, str]:
             except Exception:
                 pass
 
-        # Falls es nur freier Text ist, behandeln wir ihn als Beratungspunkt.
         return {
             "positive_feststellungen": "",
             "beratungspunkte": clean_text(raw_fields),
@@ -610,6 +674,7 @@ def _normalize_observation_fields(raw_fields: Any) -> Dict[str, str]:
         "beratungspunkte": clean_text(raw_fields),
         "memo": "",
     }
+
 
 def _dict_to_readable_text(data: Dict[str, Any]) -> str:
     parts: List[str] = []
@@ -623,7 +688,6 @@ def _dict_to_readable_text(data: Dict[str, Any]) -> str:
     if beratung:
         parts.append(f"Beratungspunkte:\n{clean_text(beratung)}")
 
-    # Sonstige Felder nur dann, wenn es nicht die internen Rohnotizen sind.
     for key, value in data.items():
         if key in {"positive_feststellungen", "beratungspunkte", "memo"}:
             continue
