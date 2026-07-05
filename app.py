@@ -37,26 +37,14 @@ init_state()
 
 
 def get_widget_version() -> int:
-    """Version der Eingabefelder.
-
-    Wenn die App Daten programmgesteuert verändert, z. B. durch KI oder JSON-Upload,
-    erhöhen wir diese Version. Dadurch bekommen die Eingabefelder neue Keys und
-    Streamlit liest die Werte frisch aus dem Protokollmodell.
-    """
     return st.session_state.get("_widget_version", 0)
 
 
 def widget_key(base_key: str) -> str:
-    """Erzeugt einen versionsabhängigen Widget-Key."""
     return f"{base_key}_v{get_widget_version()}"
 
 
 def rerun_with_fresh_widgets(notice: str) -> None:
-    """Erhöht die Widget-Version und startet die App neu.
-
-    Dadurch werden Textfelder, deren Werte durch KI oder JSON-Upload verändert wurden,
-    zuverlässig neu aus dem Protokoll befüllt.
-    """
     st.session_state["_widget_version"] = get_widget_version() + 1
     st.session_state["_notice"] = notice
     st.rerun()
@@ -199,6 +187,7 @@ def apply_ai_beratungspunkte_to_grid(grid: dict, context_label: str) -> None:
         if kriterium in grid and text.strip():
             grid[kriterium]["beratungspunkte"] = text.strip()
 
+
 def edit_schriftwesen_table(kompetenzen: dict) -> None:
     schriftwesen = kompetenzen.setdefault("schriftwesen", {})
 
@@ -241,8 +230,8 @@ def edit_schriftwesen_table(kompetenzen: dict) -> None:
                 label_visibility="collapsed",
             )
 
+
 def apply_metadata(meta: dict, target: str) -> None:
-    """Übernimmt erkannte Stammdaten aus der KI-Antwort ins Protokoll."""
     stammdaten = protocol["stammdaten"]
 
     if meta.get("laa_name"):
@@ -337,54 +326,41 @@ tabs = st.tabs(
 )
 
 
-with tabs[3]:
-    st.header("Kompetenzen")
+with tabs[0]:
+    st.header("Stammdaten")
 
-    kompetenzen = protocol["kompetenzen"]
-    erzieh = kompetenzen["erzieherische_kompetenz"]
-
-    st.subheader("Erzieherische Kompetenz")
+    stammdaten = protocol["stammdaten"]
 
     c1, c2 = st.columns(2)
 
     with c1:
-        text_area(
-            "Positive Feststellungen",
-            erzieh,
-            "positive_feststellungen",
-            height=160,
-            key="erz_pos",
+        text_input("Name LAA", stammdaten, "laa_name", key="stamm_laa")
+
+        current_buv_nummer = str(stammdaten.get("buv_nummer", "1"))
+        buv_options = ["1", "2", "3", "4"]
+        current_index = (
+            buv_options.index(current_buv_nummer)
+            if current_buv_nummer in buv_options
+            else 0
+        )
+
+        stammdaten["buv_nummer"] = st.selectbox(
+            "Nummer der Besonderen Unterrichtsvorbereitung",
+            buv_options,
+            index=current_index,
+            key=widget_key("stamm_buv_nummer"),
         )
 
     with c2:
-        text_area(
-            "Beratungspunkte",
-            erzieh,
-            "beratungspunkte",
-            height=160,
-            key="erz_ber",
-        )
-
-    st.divider()
-
-    edit_schriftwesen_table(kompetenzen)
+        text_input("Seminarjahr", stammdaten, "seminarjahr", key="stamm_seminarjahr")
+        text_input("Schule", stammdaten, "schule", key="stamm_schule")
 
     text_area(
-        "Weitere Hinweise zur Handlungs- und Sachkompetenz",
-        kompetenzen,
-        "handlungs_und_sachkompetenz",
-        height=120,
-        key="hand_sach",
-    )
-
-    st.divider()
-
-    text_area(
-        "Einbringen in Schule und Seminar",
-        kompetenzen,
-        "einbringen_schule_und_seminar",
-        height=160,
-        key="einbringen",
+        "Bemerkungen",
+        stammdaten,
+        "bemerkungen",
+        height=100,
+        key="stamm_bemerkungen",
     )
 
     save_back()
@@ -601,13 +577,19 @@ with tabs[3]:
             key="erz_ber",
         )
 
+    st.divider()
+
+    edit_schriftwesen_table(kompetenzen)
+
     text_area(
-        "Handlungs- und Sachkompetenz",
+        "Weitere Hinweise zur Handlungs- und Sachkompetenz",
         kompetenzen,
         "handlungs_und_sachkompetenz",
-        height=160,
+        height=120,
         key="hand_sach",
     )
+
+    st.divider()
 
     text_area(
         "Einbringen in Schule und Seminar",
