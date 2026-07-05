@@ -45,7 +45,7 @@ def create_word_document(protocol: Dict[str, Any]) -> bytes:
     _add_section_doppel_buv(doc, protocol.get("doppel_buv", {}))
 
     _add_section_heading(doc, "Erzieherische Kompetenz")
-    _add_section_kompetenzen(doc, protocol.get("kompetenzen", {}))
+    _add_section_kompetenzen(doc, protocol)
 
     _add_section_heading(doc, "Zusammenfassung zur Weiterarbeit")
     _add_summary_block(
@@ -397,6 +397,72 @@ def _add_zielvereinbarungen(doc: Document, protocol: Dict[str, Any]) -> None:
     else:
         _add_blank_bullets(doc, 4)
 
+def _add_schriftwesen_table(doc: Document, protocol: Dict[str, Any]) -> None:
+    kompetenzen = protocol.get("kompetenzen", {})
+    schriftwesen = kompetenzen.get("schriftwesen", {})
+    doppel_datum = clean_text(protocol.get("doppel_buv", {}).get("datum", ""))
+
+    if doppel_datum:
+        title = f"Schriftwesen (vorgelegt am: {doppel_datum})"
+    else:
+        title = "Schriftwesen (vorgelegt am: __________)"
+
+    _add_subheading(doc, title)
+
+    table = doc.add_table(rows=1, cols=4)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.style = None
+    table.autofit = True
+
+    headers = ["", "OK", "fehlt", "Bemerkung"]
+
+    for idx, header in enumerate(headers):
+        cell = table.cell(0, idx)
+        _set_cell_shading(cell, "F2F2F2")
+        _set_cell_border(cell, color=LIGHT_GRAY)
+        cell.text = header
+
+        for p in cell.paragraphs:
+            for run in p.runs:
+                _format_run(run, size=10, bold=True)
+
+    for item in SCHRIFTWESEN_ITEMS:
+        row_data = schriftwesen.get(item, {})
+        status = clean_text(row_data.get("status", "OK"))
+        bemerkung = clean_text(row_data.get("bemerkung", ""))
+
+        cells = table.add_row().cells
+
+        cells[0].text = clean_text(item)
+
+        if status == "OK":
+            cells[1].text = "x"
+            cells[2].text = ""
+        elif status == "fehlt":
+            cells[1].text = ""
+            cells[2].text = "x"
+        elif status == "--":
+            cells[1].text = "--"
+            cells[2].text = ""
+        else:
+            cells[1].text = ""
+            cells[2].text = ""
+
+        cells[3].text = bemerkung
+
+        for cell in cells:
+            _set_cell_border(cell, color=LIGHT_GRAY)
+            for p in cell.paragraphs:
+                p.paragraph_format.space_after = Pt(0)
+                for run in p.runs:
+                    _format_run(run, size=9.5)
+
+    # Spalten etwas ausrichten
+    for row in table.rows:
+        row.cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        row.cells[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    doc.add_paragraph()
 
 # ---------------------------------------------------------------------------
 # Darstellungshelfer
