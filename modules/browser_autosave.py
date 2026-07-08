@@ -14,13 +14,41 @@ from modules.storage import load_protocol_from_bytes, protocol_to_json_bytes
 AUTOSAVE_PROTOCOL_KEY = "buv_assistent_protocol_autosave_v1"
 AUTOSAVE_META_KEY = "buv_assistent_protocol_autosave_meta_v1"
 
+# Wichtig:
+# Dieser Key gehört der LocalStorage-Komponente.
+# Er darf nicht mehrfach durch neue LocalStorage-Objekte verändert werden.
+LOCAL_STORAGE_WIDGET_KEY = "buv_assistent_local_storage"
+
+# Separater interner Session-State-Key für das Python-Objekt.
+LOCAL_STORAGE_OBJECT_KEY = "_buv_assistent_local_storage_object"
+
 
 def get_local_storage() -> LocalStorage:
     """
-    Liefert Zugriff auf den Browser-LocalStorage.
-    Die Daten liegen im Browser des Nutzers, nicht auf dem Server.
+    Liefert genau eine LocalStorage-Instanz pro Streamlit-Session.
+
+    Hintergrund:
+    streamlit-local-storage verwendet intern einen Widget-Key.
+    Wenn man LocalStorage mehrfach mit demselben Key neu erzeugt,
+    kann Streamlit die Meldung ausgeben:
+
+    st.session_state.<key> cannot be modified after the widget with key <key> is instantiated.
+
+    Deshalb:
+    - Session-State-Wert vorab anlegen
+    - LocalStorage-Objekt nur einmal erzeugen
+    - danach dasselbe Objekt wiederverwenden
     """
-    return LocalStorage(key="buv_assistent_local_storage")
+
+    if LOCAL_STORAGE_WIDGET_KEY not in st.session_state:
+        st.session_state[LOCAL_STORAGE_WIDGET_KEY] = {}
+
+    if LOCAL_STORAGE_OBJECT_KEY not in st.session_state:
+        st.session_state[LOCAL_STORAGE_OBJECT_KEY] = LocalStorage(
+            key=LOCAL_STORAGE_WIDGET_KEY
+        )
+
+    return st.session_state[LOCAL_STORAGE_OBJECT_KEY]
 
 
 def protocol_has_content(protocol: dict[str, Any]) -> bool:
@@ -54,11 +82,17 @@ def protocol_has_content(protocol: dict[str, Any]) -> bool:
             return True
 
     # Beobachtungsraster prüfen
-    for buv_part in [einzel, doppel.get("stunde_1", {}), doppel.get("stunde_2", {})]:
+    for buv_part in [
+        einzel,
+        doppel.get("stunde_1", {}),
+        doppel.get("stunde_2", {}),
+    ]:
         beobachtungen = buv_part.get("beobachtungen", {})
+
         for fields in beobachtungen.values():
             if not isinstance(fields, dict):
                 continue
+
             for key in ["positive_feststellungen", "beratungspunkte", "memo"]:
                 if str(fields.get(key, "")).strip():
                     return True
@@ -68,6 +102,7 @@ def protocol_has_content(protocol: dict[str, Any]) -> bool:
 
 def build_autosave_meta(protocol: dict[str, Any]) -> dict[str, str]:
     protocol = ensure_protocol_shape(protocol)
+
     stammdaten = protocol.get("stammdaten", {})
     einzel = protocol.get("einzel_buv", {})
     doppel = protocol.get("doppel_buv", {})
@@ -118,7 +153,12 @@ def get_browser_autosave() -> tuple[dict[str, Any] | None, dict[str, Any] | None
     Rückgabe: (protocol, meta)
     """
     local_storage = get_local_storage()
-    local_storage.refreshItems()
+
+    try:
+        local_storage.refreshItems()
+    except Exception:
+        # Falls die Browser-Komponente beim ersten Laden noch nicht bereit ist.
+        pass
 
     protocol_text = local_storage.getItem(AUTOSAVE_PROTOCOL_KEY)
     meta_text = local_storage.getItem(AUTOSAVE_META_KEY)
