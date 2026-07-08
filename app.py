@@ -10,6 +10,10 @@ from modules.ai_client import (
     has_api_key,
     summarize_observations,
 )
+from modules.browser_autosave import (
+    render_browser_autosave_box,
+    save_protocol_to_browser,
+)
 from modules.protocol_model import (
     KRITERIEN,
     SCHRIFTWESEN_ITEMS,
@@ -53,7 +57,8 @@ def rerun_with_fresh_widgets(notice: str) -> None:
 st.title("Besondere Unterrichtsvorbereitung")
 st.caption(
     "Internes Seminar-Tool: Arbeitsstand lokal als JSON speichern, "
-    "Protokoll als Word-Dokument exportieren."
+    "Protokoll als Word-Dokument exportieren. Zusätzlich wird der Arbeitsstand "
+    "automatisch im Browser dieses Geräts gesichert."
 )
 
 notice = st.session_state.pop("_notice", None)
@@ -71,6 +76,14 @@ with st.sidebar:
     if st.button("Neues Protokoll", use_container_width=True):
         st.session_state.protocol = create_empty_protocol()
         rerun_with_fresh_widgets("Neues Protokoll angelegt.")
+
+    restored_protocol = render_browser_autosave_box()
+
+    if restored_protocol is not None:
+        st.session_state.protocol = restored_protocol
+        rerun_with_fresh_widgets("Browser-Sicherung wurde wiederhergestellt.")
+
+    st.divider()
 
     uploaded_json = st.file_uploader(
         "JSON-Arbeitsstand hochladen",
@@ -638,3 +651,13 @@ with tabs[4]:
     st.info(
         "Hinweis: Das Word-Dokument enthält offene Felder für die Zielvereinbarungen des LAA."
     )
+
+
+# Browser-Autosave
+try:
+    autosaved = save_protocol_to_browser(st.session_state.protocol)
+
+    if autosaved:
+        st.sidebar.caption("Zuletzt automatisch im Browser gesichert.")
+except Exception as exc:
+    st.sidebar.warning(f"Browser-Sicherung nicht verfügbar: {exc}")
