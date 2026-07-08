@@ -126,6 +126,115 @@ UNTERRICHTSENTWURF:
     text = _chat(prompt)
     return _split_bullets(text, max_items=5)
 
+def split_doppel_buv_draft(draft_text: str) -> Dict[str, Any]:
+    """
+    Analysiert einen gemeinsamen Unterrichtsentwurf zur Doppel-BUV.
+
+    Ziel:
+    - erkennen, ob zwei Unterrichtsstunden enthalten sind
+    - Stunde 1 und Stunde 2 unterscheiden
+    - Metadaten und Kurzanalyse getrennt zurückgeben
+    """
+
+    prompt = f"""
+Du bist ein erfahrener Seminarrektor für das Lehramt Mittelschule in Bayern.
+
+Analysiere den folgenden Unterrichtsentwurf zu einer möglichen Doppel-BUV.
+
+Aufgabe:
+Prüfe, ob der Text eine oder zwei Unterrichtsstunden enthält.
+Wenn zwei Unterrichtsstunden enthalten sind, ordne sie eindeutig Stunde 1 und Stunde 2 zu.
+
+Nutze zur Unterscheidung insbesondere:
+- Uhrzeiten
+- Reihenfolge im Dokument
+- Überschriften wie "1. Stunde", "2. Stunde", "Unterrichtsstunde 1", "Unterrichtsstunde 2"
+- Verlaufsplanungen
+- Artikulationsschemata
+- Fachangaben
+- Thema / Stundenthema
+- Klassenangaben
+- Kompetenzformulierungen
+- Sequenzbezüge
+
+Wichtige Regeln:
+- Wenn zwei Stunden erkennbar sind, setze "contains_two_lessons" auf true.
+- Wenn nur eine Stunde erkennbar ist, setze "contains_two_lessons" auf false.
+- Wenn Uhrzeiten erkennbar sind, ist die frühere Stunde "stunde_1".
+- Wenn keine Uhrzeiten erkennbar sind, nutze die Reihenfolge im Dokument.
+- Erfinde keine Daten.
+- Lasse unsichere oder nicht erkennbare Felder leer.
+- Gib ausschließlich valides JSON zurück. Keine Erklärungen außerhalb des JSON.
+
+JSON-Struktur:
+{{
+  "contains_two_lessons": true,
+  "confidence": "hoch",
+  "reasoning_short": "kurze Begründung, woran Stunde 1 und Stunde 2 erkannt wurden",
+  "metadata": {{
+    "laa_name": "",
+    "schule": "",
+    "datum": ""
+  }},
+  "stunde_1": {{
+    "fach": "",
+    "klasse": "",
+    "thema": "",
+    "zeit": "",
+    "kurzanalyse": [
+      "",
+      "",
+      ""
+    ]
+  }},
+  "stunde_2": {{
+    "fach": "",
+    "klasse": "",
+    "thema": "",
+    "zeit": "",
+    "kurzanalyse": [
+      "",
+      "",
+      ""
+    ]
+  }}
+}}
+
+Kurzanalyse:
+Erstelle pro Stunde maximal 5 kurze Stichpunkte.
+Beziehe dich nur auf:
+- Vorüberlegungen
+- Anbindung an den Lehrplan
+- Sequenz
+- Formulierung der Kompetenzerwartungen
+- Artikulation
+
+UNTERRICHTSENTWURF:
+{draft_text[:50000]}
+"""
+
+    raw = _chat(prompt)
+    cleaned = _strip_json_fences(raw)
+
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, dict):
+            return data
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+
+        if start != -1 and end != -1 and end > start:
+            try:
+                data = json.loads(cleaned[start : end + 1])
+                if isinstance(data, dict):
+                    return data
+            except json.JSONDecodeError:
+                pass
+
+    raise RuntimeError(
+        "Die KI konnte keine gültige Aufteilung der Doppel-BUV im JSON-Format zurückgeben."
+    )
 
 def convert_memos_to_beratungspunkte(
     observation_grid: Dict[str, Dict[str, str]],
