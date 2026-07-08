@@ -284,6 +284,65 @@ def apply_metadata(meta: dict, target: str) -> None:
                 stunde[dest] = meta[source]
 
 
+def apply_split_doppel_buv_result(result: dict) -> None:
+    """
+    Übernimmt das Ergebnis der KI-Aufteilung eines gemeinsamen Doppel-BUV-Entwurfs
+    in die Datenstruktur der Doppel-BUV.
+    """
+    stammdaten = protocol["stammdaten"]
+    doppel = protocol["doppel_buv"]
+
+    metadata = result.get("metadata", {})
+
+    if metadata.get("laa_name"):
+        stammdaten["laa_name"] = str(metadata["laa_name"]).strip()
+
+    if metadata.get("schule"):
+        stammdaten["schule"] = str(metadata["schule"]).strip()
+
+    if metadata.get("datum"):
+        doppel["datum"] = str(metadata["datum"]).strip()
+
+    for source_key, target_key in [
+        ("stunde_1", "stunde_1"),
+        ("stunde_2", "stunde_2"),
+    ]:
+        source = result.get(source_key, {})
+        target = doppel[target_key]
+
+        for field in ["fach", "klasse", "thema"]:
+            if source.get(field):
+                target[field] = str(source[field]).strip()
+
+        kurzanalyse = source.get("kurzanalyse", [])
+
+        if isinstance(kurzanalyse, list):
+            target["entwurf_analyse"] = [
+                str(item).strip()
+                for item in kurzanalyse
+                if str(item).strip()
+            ][:5]
+
+        elif isinstance(kurzanalyse, str) and kurzanalyse.strip():
+            target["entwurf_analyse"] = split_text_lines_for_app(kurzanalyse)[:5]
+
+
+def split_text_lines_for_app(text: str) -> list[str]:
+    """
+    Wandelt einen KI-Text in einzelne saubere Stichpunkt-Zeilen um.
+    """
+    lines = []
+
+    for line in text.splitlines():
+        line = line.strip()
+        line = line.lstrip("-•0123456789. )\t")
+
+        if line:
+            lines.append(line)
+
+    return lines
+
+
 def draft_upload_section(target: dict, label: str, metadata_target: str) -> None:
     st.subheader(label)
 
@@ -467,6 +526,55 @@ with tabs[2]:
     st.header("Doppel-BUV")
 
     doppel = protocol["doppel_buv"]
+
+    st.subheader("Gemeinsamer Entwurf für beide Stunden")
+
+    uploaded_doppel_combined = st.file_uploader(
+        "Gemeinsamen Unterrichtsentwurf hochladen, falls beide Stunden in einem Dokument enthalten sind",
+        type=["pdf", "docx", "txt"],
+        key="upload_doppel_combined",
+    )
+
+    if uploaded_doppel_combined:
+        combined_text = extract_text_from_upload(uploaded_doppel_combined)
+
+        with st.expander("Ausgelesenen Gesamttext anzeigen"):
+            st.text_area(
+                "Text des gemeinsamen Doppel-BUV-Entwurfs",
+                combined_text[:30000],
+                height=260,
+                key="draft_text_doppel_combined",
+            )
+
+        if st.button(
+            "Gemeinsamen Entwurf analysieren und auf Stunde 1 / Stunde 2 verteilen",
+            key="split_doppel_combined",
+        ):
+            try:
+                result = split_doppel_buv_draft(combined_text)
+
+                st.session_state["_last_doppel_split"] = result
+
+                if result.get("contains_two_lessons"):
+                    apply_split_doppel_buv_result(result)
+                    persist_protocol()
+                    rerun_with_fresh_widgets(
+                        "Gemeinsamer Entwurf wurde auf Stunde 1 und Stunde 2 verteilt."
+                    )
+                else:
+                    st.warning(
+                        "Die KI konnte nicht sicher zwei getrennte Stunden erkennen. "
+                        "Bitte prüfe den Entwurf oder nutze die getrennten Uploads."
+                    )
+
+            except Exception as exc:
+                st.error(f"KI-Fehler bei der Aufteilung der Doppel-BUV: {exc}")
+
+    if "_last_doppel_split" in st.session_state:
+        with st.expander("Zuletzt erkannte Aufteilung der Doppel-BUV anzeigen"):
+            st.json(st.session_state["_last_doppel_split"])
+
+    st.divider()
 
     text_input("Datum der Doppel-BUV", doppel, "datum", key="doppel_datum")
 
