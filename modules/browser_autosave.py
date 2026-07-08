@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime
 from typing import Any
@@ -14,32 +15,14 @@ from modules.storage import load_protocol_from_bytes, protocol_to_json_bytes
 AUTOSAVE_PROTOCOL_KEY = "buv_assistent_protocol_autosave_v1"
 AUTOSAVE_META_KEY = "buv_assistent_protocol_autosave_meta_v1"
 
-# Wichtig:
-# Dieser Key gehört der LocalStorage-Komponente.
-# Er darf nicht mehrfach durch neue LocalStorage-Objekte verändert werden.
 LOCAL_STORAGE_WIDGET_KEY = "buv_assistent_local_storage"
-
-# Separater interner Session-State-Key für das Python-Objekt.
 LOCAL_STORAGE_OBJECT_KEY = "_buv_assistent_local_storage_object"
 
 
 def get_local_storage() -> LocalStorage:
     """
     Liefert genau eine LocalStorage-Instanz pro Streamlit-Session.
-
-    Hintergrund:
-    streamlit-local-storage verwendet intern einen Widget-Key.
-    Wenn man LocalStorage mehrfach mit demselben Key neu erzeugt,
-    kann Streamlit die Meldung ausgeben:
-
-    st.session_state.<key> cannot be modified after the widget with key <key> is instantiated.
-
-    Deshalb:
-    - Session-State-Wert vorab anlegen
-    - LocalStorage-Objekt nur einmal erzeugen
-    - danach dasselbe Objekt wiederverwenden
     """
-
     if LOCAL_STORAGE_WIDGET_KEY not in st.session_state:
         st.session_state[LOCAL_STORAGE_WIDGET_KEY] = {}
 
@@ -66,13 +49,16 @@ def protocol_has_content(protocol: dict[str, Any]) -> bool:
     relevant_values = [
         stammdaten.get("laa_name", ""),
         stammdaten.get("schule", ""),
+        stammdaten.get("bemerkungen", ""),
         einzel.get("datum", ""),
         einzel.get("fach", ""),
         einzel.get("klasse", ""),
         einzel.get("thema", ""),
         einzel.get("zusammenfassung_weiterarbeit", ""),
+        einzel.get("zielvereinbarungen_laa", ""),
         doppel.get("datum", ""),
         doppel.get("zusammenfassung_weiterarbeit", ""),
+        doppel.get("zielvereinbarungen_laa", ""),
         kompetenzen.get("handlungs_und_sachkompetenz", ""),
         kompetenzen.get("einbringen_schule_und_seminar", ""),
     ]
@@ -81,7 +67,6 @@ def protocol_has_content(protocol: dict[str, Any]) -> bool:
         if isinstance(value, str) and value.strip():
             return True
 
-    # Beobachtungsraster prüfen
     for buv_part in [
         einzel,
         doppel.get("stunde_1", {}),
@@ -96,6 +81,25 @@ def protocol_has_content(protocol: dict[str, Any]) -> bool:
             for key in ["positive_feststellungen", "beratungspunkte", "memo"]:
                 if str(fields.get(key, "")).strip():
                     return True
+
+    erzieh = kompetenzen.get("erzieherische_kompetenz", {})
+    for key in ["positive_feststellungen", "beratungspunkte"]:
+        if str(erzieh.get(key, "")).strip():
+            return True
+
+    schriftwesen = kompetenzen.get("schriftwesen", {})
+    for row in schriftwesen.values():
+        if not isinstance(row, dict):
+            continue
+
+        status = str(row.get("status", "")).strip()
+        bemerkung = str(row.get("bemerkung", "")).strip()
+
+        if bemerkung:
+            return True
+
+        if status and status not in ["OK", "--"]:
+            return True
 
     return False
 
@@ -117,6 +121,10 @@ def build_autosave_meta(protocol: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _short_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
 def save_protocol_to_browser(protocol: dict[str, Any]) -> bool:
     """
     Speichert den aktuellen Arbeitsstand im Browser-LocalStorage.
@@ -132,17 +140,27 @@ def save_protocol_to_browser(protocol: dict[str, Any]) -> bool:
     json_text = protocol_to_json_bytes(protocol).decode("utf-8")
     meta_text = json.dumps(build_autosave_meta(protocol), ensure_ascii=False)
 
+    content_hash = _short_hash(json_text)
+
+    last_saved_hash = st.session_state.get("_last_browser_autosave_hash")
+
+    if last_saved_hash == content_hash:
+        return True
+
     local_storage.setItem(
         AUTOSAVE_PROTOCOL_KEY,
         json_text,
-        key="buv_autosave_protocol_set",
+        key=f"buv_autosave_protocol_set_{content_hash}",
     )
 
     local_storage.setItem(
         AUTOSAVE_META_KEY,
         meta_text,
-        key="buv_autosave_meta_set",
+        key=f"buv_autosave_meta_set_{content_hash}",
     )
+
+    st.session_state["_last_browser_autosave_hash"] = content_hash
+    st.session_state["_last_browser_autosave_time"] = datetime.now().strftime("%H:%M:%S")
 
     return True
 
@@ -150,14 +168,13 @@ def save_protocol_to_browser(protocol: dict[str, Any]) -> bool:
 def get_browser_autosave() -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """
     Liest vorhandene Browser-Sicherung.
-    Rückgabe: (protocol, meta)
+    Rückgabe: protocol, meta
     """
     local_storage = get_local_storage()
 
     try:
         local_storage.refreshItems()
     except Exception:
-        # Falls die Browser-Komponente beim ersten Laden noch nicht bereit ist.
         pass
 
     protocol_text = local_storage.getItem(AUTOSAVE_PROTOCOL_KEY)
@@ -197,6 +214,9 @@ def erase_browser_autosave() -> None:
         AUTOSAVE_META_KEY,
         key="buv_autosave_meta_erase",
     )
+
+    st.session_state.pop("_last_browser_autosave_hash", None)
+    st.session_state.pop("_last_browser_autosave_time", None)
 
 
 def render_browser_autosave_box() -> dict[str, Any] | None:
