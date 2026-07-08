@@ -8,6 +8,7 @@ from modules.ai_client import (
     extract_metadata_from_draft,
     extract_text_from_upload,
     has_api_key,
+    split_doppel_buv_draft,
     summarize_observations,
 )
 from modules.browser_autosave import (
