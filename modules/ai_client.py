@@ -240,12 +240,30 @@ def convert_memos_to_beratungspunkte(
     observation_grid: Dict[str, Dict[str, str]],
     context_label: str,
 ) -> Dict[str, str]:
-    """Formuliert Rohnotizen/Memos kriterienbezogen zu Beratungspunkten um.
+    """Formuliert ausschließlich Rohnotizen/Memos kriterienbezogen zu Beratungspunkten um.
 
-    Die App nutzt diese Funktion, um deine Rohnotizen aus dem Memo-Feld in
-    prägnante Beratungspunkte zu übertragen. Die Rohnotizen selbst bleiben in
-    der App erhalten, erscheinen aber nicht im Word-Export.
+    Wichtig:
+    Positive Feststellungen werden bewusst NICHT an die KI übergeben,
+    damit sie nicht im Feld Beratungspunkte erscheinen.
     """
+
+    cleaned_grid: Dict[str, Dict[str, str]] = {}
+
+    for kriterium, fields in observation_grid.items():
+        if not isinstance(fields, dict):
+            continue
+
+        memo = str(fields.get("memo", "") or "").strip()
+        vorhandene_beratungspunkte = str(fields.get("beratungspunkte", "") or "").strip()
+
+        # Alte fehlerhafte KI-Ausgaben nicht erneut als Grundlage verwenden.
+        if vorhandene_beratungspunkte.startswith("{") or vorhandene_beratungspunkte.startswith("["):
+            vorhandene_beratungspunkte = ""
+
+        cleaned_grid[str(kriterium)] = {
+            "memo": memo,
+            "vorhandene_beratungspunkte": vorhandene_beratungspunkte,
+        }
 
     prompt = f"""
 Du bist ein erfahrener Seminarrektor für das Lehramt Mittelschule in Bayern.
@@ -256,20 +274,36 @@ prägnante Beratungspunkte für ein Protokoll zur Besonderen Unterrichtsvorberei
 Kontext:
 {context_label}
 
+Sehr wichtig:
+- Nutze ausschließlich die Felder "memo" und "vorhandene_beratungspunkte".
+- Positive Feststellungen sind nicht Teil der Daten und dürfen nicht ergänzt, rekonstruiert oder wiederholt werden.
+- Formuliere keine positiven Feststellungen.
+- Schreibe im Feld Beratungspunkte nur Entwicklungs-, Beratungs- oder Weiterarbeitspunkte.
+- Gib pro Kriterium ausschließlich einen String zurück.
+- Gib keine Objekte, keine Listen und keine verschachtelten JSON-Strukturen zurück.
+- Verwende keine Schlüssel wie "positive_feststellung", "positive_feststellungen", "memo" oder "beratungspunkte" innerhalb eines Rückgabewerts.
+
 Regeln:
 - Formuliere sachlich, klar und entwicklungsorientiert.
 - Formuliere stichpunktartig.
 - Maximal 2 Stichpunkte pro Kriterium.
 - Keine langen Absätze.
-- Keine Rohnotizen übernehmen.
+- Keine Rohnotizen wortgleich übernehmen.
 - Keine Dopplungen.
 - Wenn zu einem Kriterium keine sinnvollen Rohnotizen oder Beratungshinweise vorliegen,
   gib für dieses Kriterium einen leeren String zurück.
 - Gib ausschließlich valides JSON zurück.
 - Die JSON-Schlüssel müssen exakt den Kriterien entsprechen.
+- Die JSON-Werte müssen einfache Strings sein.
+
+Beispiel für die gewünschte Ausgabe:
+{{
+  "Strukturierung / roter Faden": "- Material gezielter auswählen, um den fachlichen Fokus klarer sichtbar zu machen.",
+  "Zielorientierung": "- Das Unterrichtsziel für die Schülerinnen und Schüler durchgängig transparenter machen."
+}}
 
 DATEN:
-{json.dumps(observation_grid, ensure_ascii=False, indent=2)}
+{json.dumps(cleaned_grid, ensure_ascii=False, indent=2)}
 """
 
     raw = _chat(prompt)
@@ -278,7 +312,10 @@ DATEN:
     try:
         data = json.loads(cleaned)
         if isinstance(data, dict):
-            return {str(k): str(v) for k, v in data.items()}
+            return {
+                str(k): _normalize_beratungspunkt_value(v)
+                for k, v in data.items()
+            }
     except json.JSONDecodeError:
         start = cleaned.find("{")
         end = cleaned.rfind("}")
@@ -287,7 +324,10 @@ DATEN:
             try:
                 data = json.loads(cleaned[start : end + 1])
                 if isinstance(data, dict):
-                    return {str(k): str(v) for k, v in data.items()}
+                    return {
+                        str(k): _normalize_beratungspunkt_value(v)
+                        for k, v in data.items()
+                    }
             except json.JSONDecodeError:
                 pass
 
@@ -295,6 +335,65 @@ DATEN:
         "Die KI konnte keine gültigen Beratungspunkte im JSON-Format zurückgeben."
     )
 
+def _normalize_beratungspunkt_value(value: Any) -> str:
+    """
+    Macht KI-Rückgaben robust:
+    - String bleibt String
+    - Liste wird zu Stichpunkten
+    - Dict wird bereinigt, sodass positive Feststellungen nicht übernommen werden
+    """
+
+    if value is None:
+        return ""
+
+    if isinstance(value, str):
+        text = value.strip()
+
+        # Falls die KI doch JSON als String zurückgibt, versuchen wir es zu bereinigen.
+        if text.startswith("{") or text.startswith("["):
+            try:
+                parsed = json.loads(text)
+                return _normalize_beratungspunkt_value(parsed)
+            except Exception:
+                return ""
+
+        return text
+
+    if isinstance(value, list):
+        lines = []
+
+        for item in value:
+            item_text = _normalize_beratungspunkt_value(item)
+
+            if item_text:
+                lines.append(item_text)
+
+        return "\n".join(lines).strip()
+
+    if isinstance(value, dict):
+        # Positive Feststellungen ausdrücklich ignorieren.
+        for forbidden_key in [
+            "positive_feststellung",
+            "positive_feststellungen",
+            "positive",
+            "positiv",
+        ]:
+            value.pop(forbidden_key, None)
+
+        for preferred_key in [
+            "beratungspunkte",
+            "beratungspunkt",
+            "hinweise",
+            "entwicklungspunkte",
+            "weiterarbeit",
+        ]:
+            if preferred_key in value:
+                return _normalize_beratungspunkt_value(value.get(preferred_key))
+
+        # Keine sichere Beratungspunkt-Struktur erkannt.
+        return ""
+
+    return str(value).strip()
 
 def summarize_observations(protocol: Dict[str, Any], buv_type: str) -> str:
     context = json.dumps(protocol, ensure_ascii=False, indent=2)
