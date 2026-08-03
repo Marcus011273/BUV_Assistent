@@ -197,9 +197,58 @@ def edit_observation_grid(grid: dict, prefix: str) -> None:
 def apply_ai_beratungspunkte_to_grid(grid: dict, context_label: str) -> None:
     result = convert_memos_to_beratungspunkte(grid, context_label)
 
-    for kriterium, text in result.items():
-        if kriterium in grid and text.strip():
-            grid[kriterium]["beratungspunkte"] = text.strip()
+    for kriterium, value in result.items():
+        if kriterium not in grid:
+            continue
+
+        text = normalize_ai_text_for_textarea(value)
+
+        if text:
+            grid[kriterium]["beratungspunkte"] = text
+
+def normalize_ai_text_for_textarea(value) -> str:
+    """
+    Verhindert, dass verschachtelte KI-Rückgaben als Python-Dict-Text
+    im Textfeld Beratungspunkte landen.
+    """
+
+    if value is None:
+        return ""
+
+    if isinstance(value, str):
+        text = value.strip()
+
+        if text.startswith("{") or text.startswith("["):
+            return ""
+
+        return text
+
+    if isinstance(value, list):
+        lines = []
+
+        for item in value:
+            item_text = normalize_ai_text_for_textarea(item)
+
+            if item_text:
+                lines.append(item_text)
+
+        return "\n".join(lines).strip()
+
+    if isinstance(value, dict):
+        # Positive Feststellungen nie in Beratungspunkte übernehmen.
+        for key in [
+            "beratungspunkte",
+            "beratungspunkt",
+            "hinweise",
+            "entwicklungspunkte",
+            "weiterarbeit",
+        ]:
+            if key in value:
+                return normalize_ai_text_for_textarea(value.get(key))
+
+        return ""
+
+    return str(value).strip()
 
 
 def edit_schriftwesen_table(kompetenzen: dict) -> None:
