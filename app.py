@@ -194,17 +194,39 @@ def edit_observation_grid(grid: dict, prefix: str) -> None:
                 )
 
 
-def apply_ai_beratungspunkte_to_grid(grid: dict, context_label: str) -> None:
-    result = convert_memos_to_beratungspunkte(grid, context_label)
+def transform_memos_in_place(grid: dict, context_label: str) -> None:
+    """
+    Verdichtet ausschließlich die Inhalte aus "Memo / Rohnotizen" mit der KI
+    und schreibt die überarbeitete Fassung wieder in das jeweilige Memo-Feld.
+
+    Bereits vorhandene Beratungspunkte und positive Feststellungen bleiben
+    vollständig unverändert.
+    """
+    # Der KI bewusst nur die Rohnotizen übergeben. Dadurch können bereits
+    # vorhandene Beratungspunkte nicht verändert oder in die Umformulierung
+    # einbezogen werden.
+    memo_only_grid = {}
+
+    for kriterium, fields in grid.items():
+        memo_only_grid[kriterium] = {
+            "positive_feststellungen": "",
+            "beratungspunkte": "",
+            "memo": str(fields.get("memo", "") or "").strip(),
+        }
+
+    result = convert_memos_to_beratungspunkte(memo_only_grid, context_label)
 
     for kriterium, value in result.items():
         if kriterium not in grid:
             continue
 
-        text = normalize_ai_text_for_textarea(value)
+        transformed_text = normalize_ai_text_for_textarea(value).strip()
 
-        if text:
-            grid[kriterium]["beratungspunkte"] = text
+        # Nur wenn tatsächlich eine sinnvolle KI-Fassung zurückkommt, wird
+        # das Memo ersetzt. Beratungspunkte bleiben unangetastet.
+        if transformed_text:
+            grid[kriterium]["memo"] = transformed_text
+
 
 def normalize_ai_text_for_textarea(value) -> str:
     """
@@ -530,14 +552,14 @@ with tabs[1]:
 
     edit_observation_grid(einzel["beobachtungen"], "einzel")
 
-    if st.button("Rohnotizen der Einzel-BUV in Beratungspunkte umwandeln", key="convert_einzel_memos"):
+    if st.button("Rohnotizen der Einzel-BUV sprachlich verdichten", key="convert_einzel_memos"):
         try:
-            apply_ai_beratungspunkte_to_grid(
+            transform_memos_in_place(
                 einzel["beobachtungen"],
                 "Einzel-BUV",
             )
             persist_protocol()
-            rerun_with_fresh_widgets("Rohnotizen wurden in Beratungspunkte umgewandelt.")
+            rerun_with_fresh_widgets("Rohnotizen wurden sprachlich verdichtet. Beratungspunkte blieben unverändert.")
         except Exception as exc:
             st.error(f"KI-Fehler: {exc}")
 
@@ -673,17 +695,17 @@ with tabs[2]:
         edit_observation_grid(stunde["beobachtungen"], stunde_key)
 
         if st.button(
-            f"Rohnotizen {label} in Beratungspunkte umwandeln",
+            f"Rohnotizen {label} sprachlich verdichten",
             key=f"convert_{stunde_key}_memos",
         ):
             try:
-                apply_ai_beratungspunkte_to_grid(
+                transform_memos_in_place(
                     stunde["beobachtungen"],
                     label,
                 )
                 persist_protocol()
                 rerun_with_fresh_widgets(
-                    f"Rohnotizen aus {label} wurden in Beratungspunkte umgewandelt."
+                    f"Rohnotizen aus {label} wurden sprachlich verdichtet. Beratungspunkte blieben unverändert."
                 )
             except Exception as exc:
                 st.error(f"KI-Fehler: {exc}")
