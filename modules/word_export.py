@@ -341,9 +341,10 @@ def _add_observations(doc: Document, observations: Dict[str, Any]) -> None:
 
         positive = clean_text(fields.get("positive_feststellungen", ""))
         beratung = clean_text(fields.get("beratungspunkte", ""))
+        memo = clean_text(fields.get("memo", ""))
 
-        # Rohnotizen / Memo werden bewusst NICHT in das Word-Dokument übernommen.
-        if not positive and not beratung:
+        # Verdichtete Rohnotizen werden als weitere Hinweise exportiert.
+        if not positive and not beratung and not memo:
             continue
 
         _add_criteria_box(
@@ -352,6 +353,7 @@ def _add_observations(doc: Document, observations: Dict[str, Any]) -> None:
             [
                 ("Positive Feststellungen", positive),
                 ("Beratungspunkte", beratung),
+                ("Weitere Hinweise", memo),
             ],
         )
         added_any = True
