@@ -59,7 +59,22 @@ def extract_text_from_upload(uploaded_file: Any) -> str:
         from docx import Document
 
         doc = Document(BytesIO(data))
-        return "\n".join(p.text for p in doc.paragraphs).strip()
+        # Auch Tabellen auslesen: BUV-Artikulationsschemata stehen oft darin.
+        # In der Dokumentreihenfolge (python-docx mit iter_inner_content).
+        parts: List[str] = []
+        if hasattr(doc, "iter_inner_content"):
+            for element in doc.iter_inner_content():
+                if hasattr(element, "rows"):
+                    for row in element.rows:
+                        parts.append(" | ".join(cell.text.strip() for cell in row.cells))
+                else:
+                    parts.append(element.text)
+        else:
+            parts.extend(p.text for p in doc.paragraphs)
+            for table in doc.tables:
+                for row in table.rows:
+                    parts.append(" | ".join(cell.text.strip() for cell in row.cells))
+        return "\n".join(part for part in parts if part.strip()).strip()
 
     return data.decode("utf-8", errors="ignore")
 
@@ -103,111 +118,135 @@ UNTERRICHTSENTWURF:
     return {}
 
 
+# Gemeinsamer Bewertungsmaßstab für Einzel- und Doppel-BUV.
+# Die Prüfung bezieht sich auf die PLANUNG, nicht auf beobachteten Unterricht.
+BUV_ANALYSE_KRITERIEN = """
+Analysiere kritisch, fachlich präzise und beratungsorientiert anhand dieser fünf Bereiche:
+
+1. Vorüberlegungen: Prüfe fachliche Richtigkeit und Tiefe der Sachanalyse,
+   zentrale Fachbegriffe und Zusammenhänge, didaktische Reduktion,
+   Lernvoraussetzungen und daraus tatsächlich abgeleitete Planungsentscheidungen.
+   Benenne Lücken oder Widersprüche zwischen Sachanalyse und Stundenplanung.
+
+2. Lehrplanbezug: Unterscheide eine formal richtige Zuordnung vom tatsächlichen
+   Einlösen der fachlichen Anforderungen. Prüfe, ob die im Entwurf genannten
+   Lehrplan-Kompetenzen und -Inhalte in ihrer Bedeutung und Tiefe aufgegriffen
+   werden und die geforderten Handlungen und Denkprozesse stattfinden.
+   Nur bei vorliegendem Lehrplanwortlaut ist ein inhaltlicher Wortlautabgleich
+   möglich; ohne ihn Unsicherheit offen benennen, nichts erfinden.
+
+3. Sequenz: Prüfe die logische Abfolge, den roten Faden, die kumulative
+   Kompetenzentwicklung, mögliche Sprünge, Redundanzen, notwendige
+   Zwischenschritte sowie die fachlich begründete Rolle der BUV-Stunde.
+
+4. Kompetenzerwartungen: Prüfe die Präzision und Beobachtbarkeit der Ziele,
+   passende Operatoren, fachliche Substanz, Alterspassung, Realisierbarkeit
+   und kognitive Tiefe. Unterscheide reine Reproduktion von Erklären,
+   Anwenden, Begründen, Beurteilen oder Transfer, soweit fachlich sinnvoll.
+   Kompetenzen sollen Lernleistungen statt bloßer Unterrichtsaktivitäten
+   beschreiben. Keine künstlich höheren Anforderungen verlangen.
+
+5. Artikulation: Prüfe, ob Einstieg/Problemstellung, Erarbeitung, Auswertung,
+   Sicherung und gegebenenfalls Anwendung die angestrebten Kompetenzen
+   tatsächlich fördern. Beurteile konkrete Schülerhandlungen, Medien,
+   Materialien, Sozialformen, Impulse, Arbeitsaufträge, Übergänge,
+   Differenzierung, Zeitansätze und Überprüfung der Lernergebnisse.
+   Unterscheide äußere Aktivierung von fachlich gehaltvollem Lernen.
+
+Prüfe bereichsübergreifend die Kohärenz:
+Lehrplan -> Sequenz -> Kompetenzerwartungen -> Schülerhandlungen -> Sicherung.
+Decke besonders auf, wenn anspruchsvolle Ziele behauptet werden, die
+Aufgaben und die Sicherung aber nur oberflächliche Leistungen ermöglichen.
+
+Regeln:
+- Nenne konkrete Stärken UND wichtige Schwächen, keine Gefälligkeitsanalyse.
+- Begründe Kritik an erkennbaren Elementen der Planung; formuliere nach
+  Möglichkeit einen konkreten, umsetzbaren Beratungsimpuls.
+- Fehlende Angaben nicht automatisch als feststehende Planungsmängel werten.
+- Erfinde weder Lehrplanformulierungen noch Unterrichtsdetails.
+- Beurteile nur den Entwurf, nicht eine noch nicht beobachtete Durchführung.
+- Berücksichtige Fach, Jahrgangsstufe, Lernvoraussetzungen und Zeitrahmen.
+- Keine Note, keine pauschalen Qualitätsurteile.
+"""
+
+
 def analyze_draft_short(draft_text: str) -> List[str]:
     prompt = f"""
 Du bist ein erfahrener Seminarrektor für das Lehramt Mittelschule in Bayern.
 
-Analysiere den folgenden Unterrichtsentwurf knapp in höchstens 5 Stichpunkten.
+{BUV_ANALYSE_KRITERIEN}
 
-Beziehe dich nur auf diese Bereiche:
-- Vorüberlegungen
-- Anbindung an den Lehrplan
-- Sequenz
-- Formulierung der Kompetenzerwartungen
-- Artikulation
-
-Formuliere sachlich, knapp und beratungsorientiert.
-Keine langen Absätze.
+AUSGABEFORMAT (verbindlich):
+Gib GENAU fünf nummerierte EINZEILIGE Punkte zurück, in dieser Reihenfolge:
+1. Vorüberlegungen: ...
+2. Lehrplanbezug: ...
+3. Sequenz: ...
+4. Kompetenzerwartungen: ...
+5. Artikulation: ...
+Jeder Punkt besteht aus 2 bis 4 prägnanten Sätzen und enthält die
+wichtigsten fachlichen Feststellungen einschließlich konkreter Kritik,
+wo die Planung sie rechtfertigt. Keine zusätzlichen Überschriften,
+Unterpunkte oder Zeilenumbrüche innerhalb eines Punktes.
 
 UNTERRICHTSENTWURF:
-{draft_text[:30000]}
+{draft_text[:50000]}
 """
-
     text = _chat(prompt)
     return _split_bullets(text, max_items=5)
 
+
 def split_doppel_buv_draft(draft_text: str) -> Dict[str, Any]:
-    """
-    Analysiert einen gemeinsamen Unterrichtsentwurf zur Doppel-BUV.
-
-    Ziel:
-    - erkennen, ob zwei Unterrichtsstunden enthalten sind
-    - Stunde 1 und Stunde 2 unterscheiden
-    - Metadaten und Kurzanalyse getrennt zurückgeben
-    """
-
+    """Erkennt zwei Stunden und erstellt je eine fachlich vertiefte Kurzanalyse."""
     prompt = f"""
 Du bist ein erfahrener Seminarrektor für das Lehramt Mittelschule in Bayern.
 
-Analysiere den folgenden Unterrichtsentwurf zu einer möglichen Doppel-BUV.
+Analysiere einen Unterrichtsentwurf zu einer möglichen Doppel-BUV.
+Prüfe, ob eine oder zwei Unterrichtsstunden enthalten sind, und ordne sie
+anhand von Zeiten, Überschriften, Reihenfolge, Fächern, Klassen, Themen,
+Kompetenzerwartungen und Artikulationsplänen eindeutig zu.
 
-Aufgabe:
-Prüfe, ob der Text eine oder zwei Unterrichtsstunden enthält.
-Wenn zwei Unterrichtsstunden enthalten sind, ordne sie eindeutig Stunde 1 und Stunde 2 zu.
+{BUV_ANALYSE_KRITERIEN}
 
-Nutze zur Unterscheidung insbesondere:
-- Uhrzeiten
-- Reihenfolge im Dokument
-- Überschriften wie "1. Stunde", "2. Stunde", "Unterrichtsstunde 1", "Unterrichtsstunde 2"
-- Verlaufsplanungen
-- Artikulationsschemata
-- Fachangaben
-- Thema / Stundenthema
-- Klassenangaben
-- Kompetenzformulierungen
-- Sequenzbezüge
+WICHTIGE REGELN:
+- Bei zwei erkennbaren Stunden: contains_two_lessons = true.
+- Bei nur einer erkennbaren Stunde: contains_two_lessons = false.
+- Wenn Uhrzeiten eindeutig sind, ordne die frühere als stunde_1 ein,
+  sonst anhand der Reihenfolge im Dokument.
+- Beurteile jede Stunde anhand ihrer eigenen Kompetenzerwartungen,
+  Schülerhandlungen und Sicherung; ordne gemeinsame Vorüberlegungen
+  bzw. die Sequenz sachgerecht zu.
+- Erfinde keine Metadaten; lasse unbekannte Felder leer.
+- Für jede vorhandene Stunde: kurzanalyse besteht aus GENAU fünf
+  Strings, je ein String in der Reihenfolge Vorüberlegungen,
+  Lehrplanbezug, Sequenz, Kompetenzerwartungen, Artikulation.
+  Jeder String startet mit dem jeweiligen Bereichsnamen und Doppelpunkt,
+  enthält 2 bis 4 prägnante Sätze und benennt nachvollziehbare Stärken,
+  Schwächen und möglichst einen konkreten Beratungsimpuls.
+- Wenn es nur eine Stunde gibt, bleiben die Felder von stunde_2 leer
+  und kurzanalyse von stunde_2 ist eine leere Liste.
+- Gib ausschließlich syntaktisch gültiges JSON zurück.
 
-Wichtige Regeln:
-- Wenn zwei Stunden erkennbar sind, setze "contains_two_lessons" auf true.
-- Wenn nur eine Stunde erkennbar ist, setze "contains_two_lessons" auf false.
-- Wenn Uhrzeiten erkennbar sind, ist die frühere Stunde "stunde_1".
-- Wenn keine Uhrzeiten erkennbar sind, nutze die Reihenfolge im Dokument.
-- Erfinde keine Daten.
-- Lasse unsichere oder nicht erkennbare Felder leer.
-- Gib ausschließlich valides JSON zurück. Keine Erklärungen außerhalb des JSON.
-
-JSON-Struktur:
+JSON-SCHEMA (Inhalt nur als Strukturbeispiel):
 {{
   "contains_two_lessons": true,
   "confidence": "hoch",
-  "reasoning_short": "kurze Begründung, woran Stunde 1 und Stunde 2 erkannt wurden",
-  "metadata": {{
-    "laa_name": "",
-    "schule": "",
-    "datum": ""
-  }},
+  "reasoning_short": "",
+  "metadata": {{"laa_name": "", "schule": "", "datum": ""}},
   "stunde_1": {{
-    "fach": "",
-    "klasse": "",
-    "thema": "",
-    "zeit": "",
+    "fach": "", "klasse": "", "thema": "", "zeit": "",
     "kurzanalyse": [
-      "",
-      "",
-      ""
+      "Vorüberlegungen: ...", "Lehrplanbezug: ...", "Sequenz: ...",
+      "Kompetenzerwartungen: ...", "Artikulation: ..."
     ]
   }},
   "stunde_2": {{
-    "fach": "",
-    "klasse": "",
-    "thema": "",
-    "zeit": "",
+    "fach": "", "klasse": "", "thema": "", "zeit": "",
     "kurzanalyse": [
-      "",
-      "",
-      ""
+      "Vorüberlegungen: ...", "Lehrplanbezug: ...", "Sequenz: ...",
+      "Kompetenzerwartungen: ...", "Artikulation: ..."
     ]
   }}
 }}
-
-Kurzanalyse:
-Erstelle pro Stunde maximal 5 kurze Stichpunkte.
-Beziehe dich nur auf:
-- Vorüberlegungen
-- Anbindung an den Lehrplan
-- Sequenz
-- Formulierung der Kompetenzerwartungen
-- Artikulation
 
 UNTERRICHTSENTWURF:
 {draft_text[:50000]}
@@ -235,6 +274,7 @@ UNTERRICHTSENTWURF:
     raise RuntimeError(
         "Die KI konnte keine gültige Aufteilung der Doppel-BUV im JSON-Format zurückgeben."
     )
+
 
 def convert_memos_to_beratungspunkte(
     observation_grid: Dict[str, Dict[str, str]],
